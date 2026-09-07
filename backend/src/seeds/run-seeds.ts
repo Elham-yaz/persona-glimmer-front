@@ -1,21 +1,44 @@
-import { seedAgents } from './agents.seed';
-import { seedTopics } from './topics.seed';
+import { Pool } from 'pg';
+import pool, { closePool } from '../config/database';
+import { seedAgentConditions } from './agent_conditions.seed';
+import { HOTEL_CONTEXT_PLACEHOLDER_NOTE, seedContexts } from './contexts.seed';
+import { seedSurveyQuestions } from './survey_questions.seed';
 import { seedGuardrails } from './guardrails.seed';
 
-async function runSeeds() {
-  console.log('Starting database seeding...');
+/**
+ * Seed all reference data (idempotent upserts). Safe to re-run at any time.
+ */
+export async function runSeeds(
+  db: Pool = pool,
+  log: (message: string) => void = console.log
+): Promise<void> {
+  log('  > agent_conditions');
+  await seedAgentConditions(db);
+  log(`  > contexts (${HOTEL_CONTEXT_PLACEHOLDER_NOTE})`);
+  await seedContexts(db);
+  log('  > survey_questions');
+  await seedSurveyQuestions(db);
+  log('  > global_guardrails');
+  await seedGuardrails(db);
+}
 
+async function main(): Promise<void> {
+  console.log('Seeding database...');
   try {
-    await seedAgents();
-    await seedTopics();
-    await seedGuardrails();
-
-    console.log('All seeds completed successfully!');
+    await runSeeds();
+    console.log('All seeds completed successfully.');
+    await closePool();
     process.exit(0);
   } catch (error) {
-    console.error('Seeding failed:', error);
+    console.error('Seeding failed:', (error as Error).message);
+    await closePool().catch(() => undefined);
     process.exit(1);
   }
 }
 
-runSeeds();
+const isDirectRun =
+  typeof require !== 'undefined' && typeof module !== 'undefined' && require.main === module;
+
+if (isDirectRun) {
+  main();
+}

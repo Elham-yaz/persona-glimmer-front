@@ -1,51 +1,27 @@
-import express, { Express } from 'express';
+import express, { Express, Request, Response } from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import dotenv from 'dotenv';
+import { getRequiredEnvVars } from './config/study';
 import { errorHandler } from './middleware/error.middleware';
-import { validateApiKey } from './config/openai';
 
 // Routes
-import authRoutes from './routes/auth.routes';
-import userRoutes from './routes/user.routes';
-import topicRoutes from './routes/topic.routes';
-import chatRoutes from './routes/chat.routes';
-import surveyRoutes from './routes/survey.routes';
-import guardrailRoutes from './routes/guardrail.routes';
+import sessionRoutes from './routes/session.routes';
 import adminRoutes from './routes/admin.routes';
 
 dotenv.config();
 
 // Validate required environment variables on startup
-const requiredEnvVars = ['DATABASE_URL', 'OPENAI_API_KEY', 'JWT_SECRET'];
-const missingVars = requiredEnvVars.filter(varName => !process.env[varName]);
-
+// (DATABASE_URL, ADMIN_API_KEY, and OPENAI_API_KEY unless MOCK_OPENAI=true)
+const missingVars = getRequiredEnvVars().filter((name) => !process.env[name]);
 if (missingVars.length > 0) {
-  console.error('❌ Missing required environment variables:');
-  missingVars.forEach(varName => console.error(`   - ${varName}`));
+  console.error('Missing required environment variables:');
+  missingVars.forEach((name) => console.error(`   - ${name}`));
   console.error('\nPlease set these variables in your .env file or environment.');
   process.exit(1);
 }
 
-console.log('✅ All required environment variables are set');
-
-// Validate OpenAI API key on startup (non-blocking, silent in production)
-if (process.env.NODE_ENV === 'development') {
-  validateApiKey().then(isValid => {
-    if (!isValid) {
-      console.error('⚠️  Warning: OpenAI API key validation failed. Chat functionality may not work.');
-      console.error('   Please check your OPENAI_API_KEY in Render environment variables.');
-    } else {
-      console.log('✅ OpenAI API key validated successfully');
-    }
-  }).catch(() => {
-    // Non-blocking - continue startup even if validation fails
-    console.log('⚠️  Could not validate OpenAI API key (may be network issue)');
-  });
-}
-
 const app: Express = express();
-const PORT = process.env.PORT || 3000;
 
 // Trust proxy - required for running behind reverse proxies like Render, Netlify, etc.
 // This allows express-rate-limit to correctly identify users via X-Forwarded-For header
@@ -98,30 +74,26 @@ app.use(
     allowedHeaders: ['Content-Type', 'Authorization', 'x-admin-api-key'],
   })
 );
-app.use(express.json());
+app.use(express.json({ limit: '100kb' }));
 app.use(express.urlencoded({ extended: true }));
 
 // Health check
-app.get('/health', (req, res) => {
+app.get('/health', (req: Request, res: Response) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
-// API Routes
-app.use('/api/auth', authRoutes);
-app.use('/api/user', userRoutes);
-app.use('/api/topics', topicRoutes);
-app.use('/api/chat', chatRoutes);
-app.use('/api/surveys', surveyRoutes);
-app.use('/api/guardrails', guardrailRoutes);
+// API Routes (v2). Everything else — including the removed v1 endpoints — is a 404.
+app.use('/api/sessions', sessionRoutes);
 app.use('/api/admin', adminRoutes);
+
+app.use((req: Request, res: Response) => {
+  res.status(404).json({
+    success: false,
+    error: { message: `Cannot ${req.method} ${req.originalUrl}`, code: 'NOT_FOUND' },
+  });
+});
 
 // Error handling (must be last)
 app.use(errorHandler);
-
-// Start server
-app.listen(PORT, () => {
-  console.log(`Server is running on port ${PORT}`);
-  console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
-});
 
 export default app;

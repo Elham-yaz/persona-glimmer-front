@@ -1,9 +1,16 @@
-# Architecture & Engineering Guide
+# Architecture & Engineering Guide (Study 2, v2)
 
-Technical reference for the research chat platform: system architecture, data model, key flows, the AI agent system, configuration, deployment, and known issues.
+Technical reference for the research chat platform in its **Study 2 / v2** form: system architecture,
+data model, key flows, the agent prompt system, configuration, deployment, operations, testing, known
+issues and a maintenance guide.
 
 > **Audience:** engineers and researchers maintaining or extending the platform.
-> For product requirements see [PRD.md](../PRD.md); for the research instrument see [Policy_Pairs_Reference_Document.md](../Policy_Pairs_Reference_Document.md); for endpoint-level detail see [API_DOCUMENTATION.md](./API_DOCUMENTATION.md).
+> **Companion documents:** [`STUDY2_API.md`](./STUDY2_API.md) (the authoritative API contract),
+> [`STUDY2_PLAN.md`](./STUDY2_PLAN.md) (the decisions behind v2, section 0), [`API.md`](./API.md)
+> (endpoint summary), [`ADMIN_GUIDE.md`](./ADMIN_GUIDE.md) (researcher dashboard and exports),
+> [`../PRD.md`](../PRD.md) and [`../Policy_Pairs_Reference_Document.md`](../Policy_Pairs_Reference_Document.md)
+> (research documents). Where a document and the code disagree, **the code wins**; this guide
+> describes the code on branch `study2/single-session` as of 2026-09-07.
 
 ---
 
@@ -24,380 +31,715 @@ Technical reference for the research chat platform: system architecture, data mo
 13. [Testing](#13-testing)
 14. [Known issues & code health](#14-known-issues--code-health)
 15. [Maintenance guide: where to change things](#15-maintenance-guide-where-to-change-things)
+16. [Study 1 (v1) history](#16-study-1-v1-history)
 
 ---
 
 ## 1. Overview
 
-This is a **behavioral research platform** studying how a customer-service AI agent's **Emotional Intelligence (EQ) × Cognitive Intelligence (CQ)** profile affects user perceptions across service-failure scenarios framed as **utilitarian** (functional loss) vs **hedonic** (experiential loss).
+This is a **behavioral research platform** studying how a customer-service AI agent's
+**Emotional Intelligence (EI) x Cognitive Intelligence (CI)** profile affects how people perceive a
+service conversation across three service **contexts**: a utilitarian food-delivery failure, a hedonic
+food-delivery failure, and an informational hotel-booking inquiry (no failure).
 
-Participants register, are randomly and permanently assigned one of 9 AI agents, complete a one-time AI-literacy survey, then chat through 20 service-failure topics (role-playing an aggrieved customer) with a 16-question survey after each topic. Every message and survey response is logged for analysis.
+A participant arrives from a Qualtrics survey, presses **Begin**, and is silently assigned one of
+**4 agent conditions x 3 contexts** (12 cells). The context's scenario is shown and auto-sent as the
+participant's first message; the agent replies; the participant continues for a total of **10
+interactions** (1 interaction = 1 participant message + 1 agent reply). The chat then locks, a
+**16-item post-chat questionnaire** follows, and the participant receives a **unique 5-digit
+completion code** to type back into Qualtrics. There are no accounts, no login and no personal data.
 
-- **Frontend:** React SPA (Vite + TypeScript + shadcn/ui) deployed on Netlify.
+- **Frontend:** React SPA (Vite + TypeScript + shadcn/ui, hash routing) deployed on Netlify.
 - **Backend:** Node.js + Express + PostgreSQL + OpenAI Chat Completions, deployed on Render.
-- **Origin:** scaffolded with Lovable; the bulk of the application was built in late January 2026, with the study operated live through at least April 2026.
+- **Lineage:** the v1 platform (login-based, 20 topics, 9 agents) ran January-August 2026 and was
+  rewritten into v2 in September 2026. See [section 16](#16-study-1-v1-history).
 
 ## 2. Research design
 
-**Study protocol per participant:**
+**Protocol per participant (one anonymous session):**
 
-1. **Register** → randomly assigned one of 9 agents (`Math.floor(Math.random() * 9) + 1` in `backend/src/models/User.ts`, `UserModel.create`). The assignment is permanent (between-subjects design). The agent's EQ/CQ profile is deliberately hidden from participants (blinding), though the agent *name* is still shown in several UI locations.
-2. **AI-literacy survey** — one-time, 8 questions (`lit-1` … `lit-8`).
-3. **20 topics** — 10 service domains × 2 scenario framings (utilitarian / hedonic), i.e. 10 *policy pairs*. Each topic locks after **10 interactions** (user + agent exchanges).
-4. **Post-topic survey** — 16 questions (`post-1` … `post-16`), Likert 1–7, required to unlock the next topic.
-5. After all 20 topics: "Study Complete" screen.
+1. **Landing** (from the Qualtrics link, optionally carrying `?rid=<ResponseID>`) -> **Begin**.
+2. **Assignment**: one of 12 cells, fixed for the session; the participant never learns which.
+3. **Chat**: the scenario is auto-sent as interaction 1; 10 interactions total; then the session locks.
+4. **Post-chat survey**: 16 Likert items (`post-1` ... `post-16`, 1-7), submitted once.
+5. **Completion code**: unique integer in 10000-99999, shown on screen and re-shown on any revisit.
 
-**The 9 agents** (seeded by `backend/src/seeds/agents.seed.ts`) each carry a categorical EQ and CQ level (`low` / `medium` / `high`):
+**The 4 agent conditions** (`backend/src/seeds/agent_conditions.seed.ts`; table `agent_conditions`):
 
-| Agent | EQ | CQ |
-|---|---|---|
-| 1 | low | medium |
-| 2 | medium | medium |
-| 3 | medium | low |
-| 4 | low | high |
-| 5 | high | low |
-| 6 | medium | medium |
-| 7 | medium | medium |
-| 8 | high | high |
-| 9 | low | low |
+| id | code | EI | CI |
+|---|---|---|---|
+| 1 | `hiEI_hiCI` | high | high |
+| 2 | `hiEI_loCI` | high | low |
+| 3 | `loEI_hiCI` | low | high |
+| 4 | `loEI_loCI` | low | low |
 
-> ⚠️ **This is not a full 3×3 factorial**: (medium, high) and (high, medium) are missing, and (medium, medium) appears three times. Additionally, agents 1, 3, 6 and 7 have `system_prompt_template` text that *contradicts* their stored levels (e.g. Agent 1 is stored EQ=low/CQ=medium but its template claims "high cognitive intelligence"). See [Known issues](#14-known-issues--code-health).
+All four share **one neutral display name** (`Alex`) and **one context-agnostic base persona**
+(`SHARED_SYSTEM_PROMPT_TEMPLATE`, which deliberately contains no EI/CI wording). The manipulation lives
+**only** in the EI and CI guidance blocks that the prompt builder appends (section 9). A unit test
+guards this.
 
-**The 20 topics** are seeded by `backend/src/seeds/topics.seed.ts` from [Policy_Pairs_Reference_Document.md](../Policy_Pairs_Reference_Document.md): Food Delivery, Ride-Hailing, Airline, Hotel, Retail, Subscription, Telecom, Events, Banking, E-commerce — each with a utilitarian and a hedonic variant. The `domain`, `scenario_type`, and `policy_pair_id` columns are pure analysis metadata: no runtime code path reads them; the experimental manipulation manifests only through the differing `stimulus_text` and `topic_specific_policy` injected into the LLM prompt.
+**The 3 contexts** (`backend/src/seeds/contexts.seed.ts`; table `contexts`):
 
-**Survey question text** lives only in the frontend (`src/data/mockData.ts` — despite the name, this file is live production code). The database stores `(question_id, value)` pairs; analysis must join against the frontend question bank.
+| id | code | title | domain | type | content status |
+|---|---|---|---|---|---|
+| 1 | `food_utilitarian` | Missing Food Item | Food Delivery | utilitarian | verbatim copy of v1 topic 1 |
+| 2 | `food_hedonic` | Messy Food Presentation | Food Delivery | hedonic | verbatim copy of v1 topic 2 |
+| 3 | `hotel_informational` | Hotel Booking Inquiry | Hotel Booking | informational | **fabricated placeholder** ("Harborview Grand Hotel" policy document + booking record); to be replaced with the team's material |
+
+Each context has a `participant_scenario` (second person; shown in the scenario panel **and**
+auto-sent as the participant's first message) and a hidden `agent_policy` (reference material injected
+into the agent's prompt, never sent to the participant). Verbatim fidelity of contexts 1-2 and of the 16
+survey items to the v1 baseline is asserted by SHA-256 hashes in `backend/tests/unit.test.ts`.
+
+**Assignment** (`ASSIGNMENT_MODE`): `random` (default) draws uniformly over the 12 cells;
+`balanced` draws uniformly among the cells with the fewest *started* sessions, serialised with a
+Postgres advisory lock so concurrent arrivals cannot pile into one cell.
+
+**Survey items** are frozen in two places that must agree: the database table `survey_questions`
+(text, category, position, `version = '1.0'`) and the frontend bank `src/data/surveyQuestions.ts`.
+The database stores `(question_id, response_value)` per session; the item text is in the DB, so exports
+can be joined without the frontend source.
+
+**Reproducibility stamps:** every session records the `model` name it was created under (the
+configured `OPENAI_MODEL`, or `mock`) and `prompt_version` (`2.0`, a constant in `config/study.ts`).
 
 ## 3. System architecture
 
 ```
-┌────────────────────────── Browser ──────────────────────────┐
-│  React SPA (Vite + TS + shadcn/ui, HashRouter)              │
-│   /            → src/pages/Index.tsx  (participant flow)    │
-│   /#/admin     → src/pages/AdminDashboard.tsx (researcher)  │
-│   src/lib/api.ts — all HTTP; JWT in                         │
-│     localStorage['auth_token']; retry ×5 with backoff;      │
-│     /health pre-check to ride out Render cold starts        │
-└────────────┬────────────────────────────────────────────────┘
-             │ HTTPS JSON  {success, data | error:{message,code}}
-             │ Authorization: Bearer <JWT>    (participant routes)
-             │ x-admin-api-key: <key>         (admin routes)
-             ▼
-┌──────────── Render web service (root dir: backend/) ────────┐
-│  Express (backend/src/app.ts)                               │
-│   helmet → CORS → express.json → per-route rate limit       │
-│   → authenticate (JWT) → validate (Zod) → controller        │
-│   → errorHandler                                            │
-│  Routes: /health, /api/{auth,user,topics,chat,surveys,      │
-│          guardrails,admin}                                  │
-│  services/agent.service.ts   — system-prompt assembly       │
-│  services/openai.service.ts  — chat completions             │
-└─────┬───────────────────────────────┬───────────────────────┘
-      │ pg Pool (max 20)              │ OpenAI SDK, 30s timeout
-      ▼                               ▼
-┌ Render PostgreSQL ┐        ┌ OpenAI Chat Completions  ┐
-│ 9 live tables     │        │ gpt-4o-mini (default),   │
-└───────────────────┘        │ temp 0.7, max_tokens 500 │
-                             └──────────────────────────┘
++----------------------------- Browser -------------------------------+
+|  React SPA (Vite + TS + shadcn/ui, HashRouter)                      |
+|   /            -> src/pages/Study.tsx   (participant flow)          |
+|   /#/admin     -> src/pages/AdminDashboard.tsx (researcher)         |
+|   src/lib/api.ts -- all HTTP; session id in                         |
+|     localStorage['study_session_id'];                               |
+|     admin key in sessionStorage['admin_api_key'];                   |
+|     retry x5 with backoff for cold starts; /health pre-check        |
++-------------+-------------------------------------------------------+
+              | HTTPS JSON  {success, data | error:{message,code}}
+              | Authorization: Bearer <sessionId>   (participant routes)
+              | x-admin-api-key: <key>              (admin routes)
+              v
++----------- Render web service "persona-glimmer-backend" ------------+
+|  Express (backend/src/app.ts), root dir backend/                    |
+|   helmet -> CORS -> express.json(100kb) -> [create/admin limiter]   |
+|   -> requireSession | requireAdmin -> [message limiter: per         |
+|      session, runs after requireSession] -> validate (Zod)          |
+|   -> controller -> errorHandler                                     |
+|  Routes: /health, /api/sessions/*, /api/admin/*  (everything else   |
+|          is 404, incl. all v1 endpoints; /api/admin/* paths answer  |
+|          401/403 first unless a valid admin key is sent)            |
+|  services/assignment.service.ts -- random | balanced cell choice    |
+|  services/agent.service.ts      -- system-prompt assembly           |
+|  services/openai.service.ts     -- chat completion (or mock)        |
++------+---------------------------------------+----------------------+
+       | pg Pool (max 20), withTransaction()   | OpenAI SDK, 30 s timeout,
+       v                                       v 0 SDK retries
++ Render PostgreSQL ------+          + OpenAI Chat Completions --------+
+| 8 tables incl.          |          | OPENAI_MODEL (gpt-4o-mini),    |
+| schema_migrations       |          | temp 0.7, max_tokens 500       |
++-------------------------+          +--------------------------------+
 
-Frontend deploy: Netlify (netlify.toml — publish dist/, SPA redirect;
-  env var VITE_API_URL points at the Render backend)
+Frontend deploy: Netlify (netlify.toml -- publish dist/, SPA redirect;
+  VITE_API_URL baked in at build time, pointing at the Render URL)
 ```
 
 ## 4. Repository layout
 
 ```
-/                       Frontend (Vite React app) + project docs
-├── src/
-│   ├── pages/          Index.tsx (participant state machine),
-│   │                   AdminDashboard.tsx, NotFound.tsx
-│   ├── components/
-│   │   ├── auth/       AuthForm, ForgotPasswordForm, AgentIntroduction (dead)
-│   │   ├── chat/       ChatWindow, MessageInput, MessageBubble,
-│   │   │               TopicHeader, TypingIndicator
-│   │   ├── layout/     TopicList, TopicListModal, PolicyPanel, ProgressBar
-│   │   ├── survey/     SurveyModal, LikertScale
-│   │   └── ui/         shadcn/ui primitives (generated)
-│   ├── lib/api.ts      All HTTP calls, token helpers
-│   ├── utils/retry.ts  Retry-with-backoff wrapper used by api.ts
-│   ├── data/mockData.ts  LIVE: survey question banks + displayed guardrails
-│   └── types/index.ts  Shared frontend types
-├── backend/
-│   └── src/
-│       ├── app.ts              Express bootstrap, CORS, route mounting
-│       ├── config/             database.ts (pg Pool), openai.ts (SDK client)
-│       ├── middleware/         auth (JWT), validation (Zod), error handler
-│       ├── routes/ + controllers/   auth, user, topic, chat, survey,
-│       │                            guardrail, admin
-│       ├── services/           agent.service.ts, openai.service.ts
-│       ├── models/             One class per table (raw SQL via pg)
-│       ├── migrations/         Plain .sql files + run-migrations.ts runner
-│       ├── seeds/              agents, topics, guardrails + run-seeds.ts
-│       └── utils/              sanitize.ts, password.ts, errors.ts,
-│                               intelligenceLevel.ts (dead)
-├── docs/               This file, API docs, DB schema doc, admin docs
-├── netlify.toml        Frontend deploy config
-├── render.yaml         Backend deploy config
-└── *.md (repo root)    PRD, policy-pairs reference, and ~35 historical
-                        incident/fix logs from the January 2026 deployment
+/                          Frontend (Vite React app) + project docs
+|-- src/
+|   |-- pages/             Study.tsx (participant state machine), AdminDashboard.tsx, NotFound.tsx
+|   |-- components/
+|   |   |-- chat/          ChatHeader, ChatWindow, MessageBubble, MessageInput, TypingIndicator
+|   |   |-- layout/        ScenarioPanel
+|   |   |-- survey/        SurveyScreen, LikertScale
+|   |   `-- ui/            shadcn/ui primitives (generated)
+|   |-- lib/api.ts         All HTTP calls, storage helpers, error mapping
+|   |-- lib/entryParams.ts Reads ?rid= and ?force= from the URL (search or hash query)
+|   |-- utils/retry.ts     Retry-with-backoff wrapper used by api.ts
+|   |-- data/surveyQuestions.ts  The 16 post-chat items (mirror of the DB table)
+|   |-- types/index.ts     Shared frontend types (mirror of STUDY2_API.md)
+|   `-- test/              Vitest + Testing Library specs (study, admin, api, entryParams)
+|-- backend/
+|   |-- src/
+|   |   |-- app.ts              Express app (exported; does not listen)
+|   |   |-- server.ts           Listens, dev-only OpenAI key check, graceful shutdown
+|   |   |-- config/             study.ts (constants + env switches), database.ts (pool,
+|   |   |                       withTransaction), openai.ts (lazy client, 30 s / 0 retries)
+|   |   |-- middleware/         session (Bearer session id), validation (Zod), error handler
+|   |   |-- routes/ + controllers/   session.*, admin.*
+|   |   |-- services/           assignment, agent (prompt assembly), openai
+|   |   |-- models/             AgentCondition, Context, Session, SessionMessage,
+|   |   |                       SessionSurveyResponse, SurveyQuestion, GlobalGuardrail, db.ts
+|   |   |-- migrations/         001-008 *.sql, run-migrations.ts (tracked), reset-database.ts (guarded)
+|   |   |-- seeds/              agent_conditions, contexts, survey_questions, guardrails, run-seeds.ts
+|   |   `-- utils/              errors.ts, sanitize.ts, completionCode.ts
+|   |-- tests/                  Vitest + supertest integration/unit tests (local Postgres)
+|   |-- env.example, README.md, check-env.ts, test-db-connection.ts
+|-- docs/                  This file, STUDY2_API.md, STUDY2_PLAN.md, API.md, ADMIN_GUIDE.md,
+|                          archive/study1/ (retired v1 notes)
+|-- PRD.md, Policy_Pairs_Reference_Document.md   Research documents (root)
+|-- netlify.toml           Frontend deploy config
+`-- render.yaml            Backend deploy config (Blueprint)
 ```
 
 ## 5. Frontend architecture
 
-**Routing** (`src/App.tsx`): `HashRouter` with three routes — `/` (participant app), `/admin` (researcher dashboard, i.e. `/#/admin` in the URL), and a catch-all `NotFound`. Hash routing was adopted after path-based routing 404'd on static hosting; an effect in `App.tsx` additionally redirects a plain-path `/admin` visit to `/#/admin`.
+**Routing** (`src/App.tsx`): `HashRouter` with three routes -- `/` (participant flow), `/admin`
+(researcher dashboard, `/#/admin` in the URL) and a catch-all `NotFound`. An effect redirects a
+plain-path `/admin` visit to `/#/admin`. Hash routing survives static hosting regardless of redirect
+rules. State is plain `useState`/`useEffect`; there is no react-query.
 
-**State management:** everything is hand-rolled `useState`/`useEffect`. A `QueryClientProvider` is mounted in `App.tsx` but **no component uses react-query** — it is vestigial scaffolding.
-
-**`src/pages/Index.tsx` is the heart of the frontend.** It owns the entire participant state machine:
+**`src/pages/Study.tsx`** owns the participant state machine. Its `view` is one of
+`loading | landing | chat | survey | completion | error`:
 
 ```
-auth ──► literacy-survey ──► chat loop (per topic) ──► study complete
-  │                            │  10 exchanges → topic locks
-  └── admin login branch       └► 16-q post-topic survey → next topic
+bootstrap: localStorage has study_session_id?
+  no  -> landing --Begin--> POST /api/sessions -> chat
+  yes -> GET /api/sessions/me
+           surveyCompleted -> completion (code re-shown)
+           isLocked        -> survey
+           otherwise       -> chat (transcript restored)
+           401 SESSION_INVALID -> forget id, landing (toast)
+           other error         -> error view with "Try again"
+chat: messages.length === 0 -> auto-send openingMessage once (clientMessageId "opening")
+      ... 10 interactions -> isLocked -> "Continue to the questionnaire" -> survey
+survey: 16 items, submit disabled until all answered -> POST /me/survey -> completion
 ```
 
-Key responsibilities concentrated in `Index.tsx`:
+Key behaviours:
 
-- On mount, `loadUserState` restores the session from the stored JWT (`GET /api/user/state`), loading the current topic, message history, and progress.
-- `handleAuth` handles register/login; a hardcoded credential check branches to the admin dashboard (see [Known issues](#14-known-issues--code-health)).
-- `handleSendMessage` performs an optimistic UI update, calls `POST /api/chat/message`, then reconciles with the server response (interaction count, lock state, survey trigger).
-- `handleLiteracySurveySubmit` → after the literacy survey, auto-sends the topic's `stimulus_text` as the participant's first message — **only at this one call site**, which is why topic 1 behaves differently from topics 2–20 (see Known issues).
-- Survey modals, progress, and the "Study Complete" screen — shown when `completedTopics >= totalTopics` **or** `currentTopicIndex >= allTopics.length`. The second condition misfires when the topic list failed to load (`0 >= 0`), showing "Study Complete" to a mid-study participant.
+- **Entry parameters** (`src/lib/entryParams.ts`): `rid` becomes `externalId` (trimmed to 100 chars);
+  `force=<agent>,<context>` becomes `force` (validated to 1-4 / 1-3, otherwise ignored). Both are read
+  from the regular query string and from the query inside the hash (`/#/?rid=X`), hash winning.
+  `force` is only *honoured* by the backend when `ALLOW_FORCED_ASSIGNMENT=true`.
+- **Opening auto-send**: when the chat view has a session with no messages and the session is not
+  locked, the frontend sends `openingMessage` (== `context.participantScenario`) with the fixed
+  `clientMessageId: "opening"`, guarded by a ref so StrictMode/re-renders cannot fire it twice. The
+  input is disabled with "Please wait for the conversation to start..." until the reply arrives.
+- **Sending**: each new message gets `crypto.randomUUID()` as `clientMessageId`. On success the two
+  returned messages are merged by id and the counter/lock state updated. Error handling:
+  `SESSION_INVALID` -> back to landing; `SESSION_LOCKED` / `SESSION_COMPLETED` -> re-sync from
+  `GET /me` (local state was stale); anything else (`AGENT_UNAVAILABLE`, timeout, network) -> the
+  draft **and the same `clientMessageId`** are kept and an inline "Try again" appears. A retry, even
+  after editing the draft, reuses that id, so the server can never store the message twice.
+- **Survey**: `SurveyScreen` is full-screen and not dismissible; responses are emitted in instrument
+  order (`post-1` ... `post-16`). `SESSION_NOT_LOCKED` / `SESSION_COMPLETED` on submit re-sync from
+  the server.
+- **Completion**: the code is rendered large with a copy button, the instruction to enter it in
+  Qualtrics, and a note that reopening the page shows the same code. If the code is somehow missing,
+  a "Reload code" button calls `GET /me`.
+- **Blinding**: the only agent attribute ever rendered is `agent.displayName`; the UI never receives
+  EI/CI levels, condition codes or the agent policy (`ScenarioPanel` shows exactly `context.title` and
+  `context.participantScenario`). `ChatHeader` shows `interactionCount / maxInteractions` taken from
+  the API, never a hardcoded 10.
 
 **API layer** (`src/lib/api.ts`):
 
-- Base URL from `VITE_API_URL` (default `http://localhost:3000`); all endpoints under `/api`.
-- JWT stored in `localStorage['auth_token']`; sent as `Authorization: Bearer <token>`.
-- On any 401: token removed and an `auth-failed` window event dispatched; `Index.tsx` listens and resets to the auth screen. This blanket handler also intercepts a failed *login* (the backend returns 401 for bad credentials), so a mistyped password surfaces as a "session expired" toast instead of "invalid email or password".
-- For `/auth/` and `/admin/` calls, a `GET /health` pre-check waits up to ~30s for Render free-tier cold starts.
-- Every request is wrapped in `retry()` (`src/utils/retry.ts`): 1 initial attempt + up to 5 retries (6 total), exponential backoff starting at 2s, 30s `AbortController` timeout per attempt. ⚠️ This includes **non-idempotent POSTs** — see Known issues.
-- Responses follow `{success: true, data} | {success: false, error: {message, code}}`.
+- Base URL from `VITE_API_URL` (default `http://localhost:3000`).
+- Credentials: the session id lives in `localStorage['study_session_id']` and is sent as
+  `Authorization: Bearer <sessionId>`; the admin key lives in `sessionStorage['admin_api_key']` and
+  is sent as `x-admin-api-key`. Storage access is wrapped in try/catch (private mode).
+- `apiRequest()` wraps `fetch` in `retry()` (`src/utils/retry.ts`): up to 5 retries with exponential
+  backoff from 2 s, 30 s per attempt. Retried: bare `502/503/504` without an API envelope (Render cold
+  start), network errors, and per-attempt timeouts. **Not** retried: any response carrying an API
+  envelope -- in particular a `502 AGENT_UNAVAILABLE` is surfaced immediately for a manual retry.
+  `sendMessage` uses a 45 s attempt (server-side model timeout 30 s plus margin) and does **not**
+  auto-retry a timeout, because the idempotent `clientMessageId` makes the participant's manual
+  "Try again" the safer path.
+- `coldStartWait` (session create/resume, admin verify/dashboard) pings `/health` and waits up to 30 s
+  for the backend to wake before the real request.
+- `401` on a participant call clears the stored session id and becomes `SESSION_INVALID`; `401` on an
+  admin call clears the stored key and becomes `ADMIN_UNAUTHORIZED`; `429` becomes `RATE_LIMITED`
+  quoting `Retry-After`. Backend error codes are otherwise passed through verbatim.
+- `adminApi.exportCsv()` fetches the streamed CSV as a blob (the key travels in a header, so a plain
+  link cannot be used) and saves it via an object URL, taking the filename from `Content-Disposition`.
 
-**Presentational components** (`src/components/`) are thin: `ChatWindow` renders messages + typing indicator; `MessageInput` gates on lock state; `PolicyPanel` shows the topic stimulus, the *hardcoded* guardrail text from `mockData.ts`, and a static placeholder sentence where a topic policy would go (the real `topic_specific_policy` never leaves the backend — no API response carries it); `SurveyModal`/`LikertScale` render the 16-question instrument; `TopicList`/`ProgressBar` show progression.
+**`src/pages/AdminDashboard.tsx`** gates itself behind the key form (`GET /api/admin/verify`), then
+renders four tabs (Dashboard with totals and the 4 x 3 cell grid, Sessions with a detail modal,
+Messages, Surveys), each paged at 100 rows with server-side filters, and three export buttons. Cell
+codes come from the dashboard payload, so nothing about the conditions is hardcoded except the id
+ranges 1-4 and 1-3 used to lay out the grid. See [`ADMIN_GUIDE.md`](./ADMIN_GUIDE.md).
 
 ## 6. Backend architecture
 
-**Bootstrap** (`backend/src/app.ts`): validates that `DATABASE_URL`, `OPENAI_API_KEY`, and `JWT_SECRET` are present (exits otherwise), sets `trust proxy 1` (Render), applies `helmet`, CORS, and `express.json`, mounts routes, and registers the error handler last.
-
-> Note: env loading is order-fragile — `config/openai.ts` and `config/database.ts` call `dotenv.config()` at import time, which is what actually loads `.env` before `app.ts`'s own top-level code runs.
+**Bootstrap** (`backend/src/app.ts`): loads `.env`, checks that `DATABASE_URL`, `ADMIN_API_KEY` and
+(unless `MOCK_OPENAI=true`) `OPENAI_API_KEY` are present -- exits with a list of the missing names
+otherwise -- sets `trust proxy 1` (Render), applies `helmet`, CORS and `express.json({ limit: '100kb' })`,
+mounts `/health`, `/api/sessions`, `/api/admin`, a JSON `404 NOT_FOUND` catch-all, and the error handler
+last. `app.ts` exports the app; `server.ts` listens (`PORT`, default 3000), logs the assignment mode and
+mock status, validates the OpenAI key in development only (non-blocking), and shuts down gracefully on
+`SIGTERM`/`SIGINT` (close server, drain pool, hard exit after 10 s).
 
 **Middleware pipeline** (per request):
 
 ```
-helmet → CORS → express.json
-  → authenticate (JWT → req.userId/req.userEmail)   [all /api/* except /api/auth]
-  → rate limiter   [auth routes only; plus POST /api/chat/message, after authenticate]
-  → validate (Zod schema on {body,query,params})
-  → controller → errorHandler
+POST /api/sessions   : helmet -> CORS -> express.json -> createSessionLimiter (per IP)
+                       -> validate (Zod on {body, query, params}) -> controller -> errorHandler
+/api/sessions/me/*   : helmet -> CORS -> express.json -> requireSession
+                       -> messageLimiter (per session; POST /me/messages only)
+                       -> validate -> controller -> errorHandler
+/api/admin/*         : helmet -> CORS -> express.json -> adminRateLimiter (per IP)
+                       -> requireAdmin -> controller -> errorHandler
 ```
 
-- **CORS** (`app.ts`): the `Origin` header is parsed as a URL and checked against: any localhost/127.0.0.1 port in development, an exact match with `FRONTEND_URL` (normalized, no trailing slash), or an HTTPS origin whose parsed *hostname* ends with `.netlify.app` (a true suffix check — `x.netlify.app.evil.com` is rejected). Requests with **no `Origin` header are always allowed** — CORS is a browser mechanism and does not gate curl/server-side clients.
-- **Rate limits** (express-rate-limit): register/login 5 per 15 min, password reset 3/hr, `POST /api/chat/message` 30/min (applied after `authenticate`), and all `/api/admin/*` routes 100 per 15 min (failed key attempts count, throttling brute force). The chat GET endpoints and the user/topic/survey/guardrail routes are not rate-limited.
-- **`authenticate`** (`middleware/auth.middleware.ts`): verifies an HS256 JWT (payload `{userId, email}`, 7-day expiry), then does one DB lookup to reject tokens for deleted users and tokens issued before the user's last password reset (`password_changed_at`), and copies the payload onto the request as `req.userId`/`req.userEmail` (no `req.user`; controllers fetch the full user record themselves). `generateToken` in the same file issues tokens; there is no fallback JWT secret — the process exits at startup if `JWT_SECRET` is unset.
-- **`validate`** (`middleware/validation.middleware.ts`): parses with Zod and maps `ZodError` → 400. The parse *result* is discarded, so Zod transforms/defaults never reach controllers.
-- **Error handling** (`middleware/error.middleware.ts` + `utils/errors.ts`): typed `AppError` subclasses (`ValidationError` 400, `AuthenticationError` 401, `NotFoundError` 404, `ConflictError` 409); anything else becomes a generic 500 (`INTERNAL_ERROR`), with detail leaked only in development.
+The two per-IP limiters run **before** authentication (so rejected admin keys count); the per-session
+message limiter needs `req.session.id` and therefore runs **after** `requireSession` -- a request with a
+missing or unknown bearer gets `401` and never counts against it.
+
+- **CORS**: requests without an `Origin` header are allowed (non-browser clients). Otherwise the origin
+  is parsed as a URL and allowed if: not in production and the hostname is `localhost`/`127.0.0.1`
+  (any port); or it equals `FRONTEND_URL` exactly (trailing slashes stripped); or it is `https:` and the
+  **hostname ends with `.netlify.app`** (a real suffix test -- `x.netlify.app.evil.com` is rejected).
+  Allowed headers: `Content-Type`, `Authorization`, `x-admin-api-key`.
+- **Rate limits** (`express-rate-limit`, all skipped when `DISABLE_RATE_LIMITS=true`, all answering
+  `429 RATE_LIMITED`):
+  - `POST /api/sessions`: `SESSION_CREATE_LIMIT_PER_HOUR` per IP per hour (default **60**). The limit is
+    read on every request so it can be raised without a code change when many participants share one
+    public IP (labs, campus NAT).
+  - `POST /api/sessions/me/messages`: `MESSAGE_LIMIT_PER_MINUTE` per **session** per minute (default
+    **30**; keyed by `session:<id>`, applied after `requireSession`). Replays count.
+  - `/api/admin/*`: 100 per IP per 15 minutes, applied before the key check so rejected keys count.
+- **`requireSession`** (`middleware/session.middleware.ts`): `Authorization: Bearer <uuid>`; missing,
+  malformed or unknown -> `401 SESSION_INVALID`; otherwise the full session row is attached as
+  `req.session`.
+- **`requireAdmin`** (`controllers/admin.controller.ts`): `403 ADMIN_NOT_CONFIGURED` if `ADMIN_API_KEY`
+  is unset (fails closed, no fallback, no dev bypass); `401 ADMIN_UNAUTHORIZED` unless the header equals
+  the key (SHA-256 of both, then `timingSafeEqual`). The key is read at request time.
+- **`validate`** (`middleware/validation.middleware.ts`): Zod shape check, `ZodError` -> `400
+  VALIDATION_ERROR`. The parse result is discarded; controllers re-read `req.body` and do the semantic
+  checks and sanitisation themselves.
+- **Errors** (`middleware/error.middleware.ts`, `utils/errors.ts`): `AppError` subclasses map to
+  `400 ValidationError`, `401 AuthenticationError`/`SessionInvalidError`, `404 NotFoundError`,
+  `409 ConflictError` (codes `SESSION_LOCKED`, `SESSION_COMPLETED`, `SESSION_NOT_LOCKED`) and
+  `502 AgentUnavailableError`. Malformed JSON bodies become `400`, bodies over the 100 kB limit `413 PAYLOAD_TOO_LARGE`. Anything else is `500 INTERNAL_ERROR`
+  with the message exposed only in development. If headers were already sent (a CSV stream), the
+  response is destroyed instead.
 
 **Route map:**
 
 | Mount | Routes | Auth |
 |---|---|---|
 | `/health` | liveness probe | none |
-| `/api/auth` | `POST /register`, `POST /login`, `POST /forgot-password`, `POST /reset-password` | none (rate-limited) |
-| `/api/user` | `GET /state` (full session restore payload), `GET /agent` | JWT |
-| `/api/topics` | `GET /`, `GET /current`, `GET /with-status`, `GET /:id` | JWT |
-| `/api/chat` | `POST /message`, `GET /messages/:topicId`, `GET /status/:topicId` | JWT |
-| `/api/surveys` | `POST /literacy`, `GET /literacy/status`, `POST /post-topic` | JWT |
-| `/api/guardrails` | `GET /` | JWT |
-| `/api/admin` | `GET /verify`, `GET /dashboard`, `GET /users`, `GET /users/:userId`, `GET /messages`, `GET /surveys/literacy`, `GET /surveys/post-topic`, `POST /migrations/run`, `POST /seeds/run` | `x-admin-api-key` header (timing-safe compare against `ADMIN_API_KEY`; **fails closed** — 403 for every request if the env var is unset) |
+| `/api/sessions` | `POST /` (create), `GET /me` (resume), `POST /me/messages`, `POST /me/survey` | none for create; session bearer for `/me/*` |
+| `/api/admin` | `GET /verify`, `/dashboard`, `/sessions`, `/sessions/:id`, `/messages`, `/surveys`, `/export?type=` | `x-admin-api-key`; read-only |
 
-**Models** (`backend/src/models/`) are plain classes issuing parameterized SQL through the shared pg `Pool` (`config/database.ts`, max 20 connections). There is no ORM and — notably — **no transactions anywhere** (see Known issues).
+Everything else, including every v1 endpoint (`/api/auth`, `/api/user`, `/api/topics`, `/api/chat`,
+`/api/surveys`, `/api/guardrails`, `/api/admin/users`, the migration/seed endpoints), returns `404`
+(paths under `/api/admin/` return `401`/`403` first unless a valid admin key is sent, because
+`adminRateLimiter` and `requireAdmin` are router-level middleware that run before path matching).
 
-**Input sanitization** (`backend/src/utils/sanitize.ts`) runs in controllers *after* Zod validation, on every user-supplied string: strips null bytes and C0 control characters (preserving tab/LF/CR), trims, and **silently truncates** — `sanitizeString` at 10,000 chars, `sanitizeMessageContent` at 5,000, `sanitizeEmail` at 255 (lowercased, whitespace stripped), `sanitizePassword` at 1,000 (not trimmed). There is no LLM content moderation on input.
+**Models** (`backend/src/models/`) are plain classes issuing parameterised SQL through either the shared
+`pg` Pool or a checked-out client (`Queryable`, `models/db.ts`), so the same method can run inside a
+transaction. `config/database.ts` provides `withTransaction(fn)` (BEGIN / COMMIT / ROLLBACK on throw)
+and `closePool()`. No ORM.
+
+**Input sanitisation** (`utils/sanitize.ts`) runs in controllers after Zod: `sanitizeString` (null
+bytes, C0 control characters **except TAB/LF/CR**, and DEL `0x7F` removed -- so newlines in participant
+text survive into the database and CSV -- then trimmed and cut at 10,000 chars) for `externalId`, which
+is then cut at 100; `sanitizeMessageContent` (same, cut at 5,000) for message text. Because Zod already rejects
+content over 5,000 characters, the message cut is a no-op in practice. There is no LLM-side content
+moderation on input; the prompt-level guardrails are the only content control.
 
 ## 7. Data model
 
-PostgreSQL, provisioned by plain-SQL files in `backend/src/migrations/`, executed by `run-migrations.ts` — a hand-rolled runner with a **hardcoded file list** and no `schema_migrations` tracking table (idempotency relies on `IF NOT EXISTS` and swallowing pg error codes `42P07`/`42710`, which also makes `npm run migrate` safe to re-run). The runner additionally retries-then-skips failing `CREATE INDEX` statements (error `42703`), and it splits each file naively on semicolons and executes the fragments without a transaction — a semicolon inside a string literal breaks it, and a mid-file failure leaves a migration half-applied.
+PostgreSQL, provisioned by plain-SQL files `backend/src/migrations/NNN_*.sql` and a **tracked,
+transactional runner** (`run-migrations.ts`, `npm run migrate`): it creates
+`schema_migrations(filename PK, applied_at)` if missing, then applies every `\d{3}_*.sql` in filename
+order that is not yet recorded. Each file is executed as **one multi-statement query inside one
+transaction** together with its `schema_migrations` row, so a failure leaves nothing half-applied.
+Re-running applies nothing. Adding a migration means adding a file -- there is no list to maintain.
 
 | Table | PK | Key columns / constraints |
 |---|---|---|
-| `users` | UUID | `email` UNIQUE; `password_hash` (bcrypt, cost 12); `assigned_agent_id` INT CHECK 1–9 (no FK to `agents`); `current_topic_index` INT CHECK 0–19 (0-based); `has_completed_literacy_survey` BOOL; `password_changed_at` TIMESTAMPTZ (migration 012 — used to invalidate JWTs issued before a password reset) |
-| `agents` | INT 1–9 | `name`, `system_prompt_template`; `emotional_intelligence_level` / `cognitive_intelligence_level` VARCHAR CHECK IN ('low','medium','high') — originally INTEGER 1–10, converted by migration `010_update_agents_intelligence_levels.sql` |
-| `topics` | INT 1–20 | `title`, `stimulus_text`, `topic_specific_policy`, `order_index` UNIQUE 1–20 (1-based); migration 011 adds `domain`, `scenario_type`, `policy_pair_id`, `initial_customer_message` — all nullable and unconstrained; the 'utilitarian'/'hedonic' and 1–10 value sets are seed conventions, not CHECKs |
-| `messages` | UUID | `user_id` FK→users CASCADE; `topic_id` FK→topics RESTRICT; `role` CHECK ('user','agent'); `content`; `timestamp` |
-| `user_topic_interactions` | UUID | UNIQUE(user_id, topic_id); `interaction_count` CHECK ≥ 0 (the 10-cap is app-level only); `is_locked`; `survey_completed` |
-| `ai_literacy_survey_responses` | UUID | UNIQUE(user_id, question_id); `response_value` TEXT (no range validation) |
-| `post_topic_survey_responses` | UUID | UNIQUE(user_id, topic_id, question_id); `response_value` INT CHECK 1–7 |
-| `global_guardrails` | INT CHECK (id=1) | singleton row: `title`, `content` |
-| `password_reset_tokens` | UUID | `token` UNIQUE (stores the SHA-256 hash of the token; the raw token exists only in the response to the requester); `expires_at`; `used` |
+| `agent_conditions` (001) | INT CHECK 1-4 | `code` UNIQUE (`hiEI_hiCI` ...); `emotional_intelligence`, `cognitive_intelligence` CHECK IN ('low','high'), UNIQUE together; `display_name`; `system_prompt_template` |
+| `contexts` (002) | INT CHECK 1-3 | `code` UNIQUE; `title`, `domain`; `scenario_type` CHECK IN ('utilitarian','hedonic','informational'); `participant_scenario`; `agent_policy` |
+| `sessions` (003) | UUID `gen_random_uuid()` | `agent_condition_id` FK, `context_id` FK; `external_id` VARCHAR(100) nullable (indexed); `interaction_count` CHECK 0-10; `is_locked`; `survey_completed`; `completion_code` INT UNIQUE CHECK 10000-99999; `model`, `prompt_version`; `created_at` (indexed), `locked_at`, `completed_at`, `updated_at`; index on `(agent_condition_id, context_id)` |
+| `session_messages` (004) | UUID | `session_id` FK CASCADE; `sequence` >= 1, UNIQUE per session; `role` CHECK ('user','agent'); `content`; `is_fallback` (always false in v2); `client_message_id` VARCHAR(64) UNIQUE per session (set on user messages only -- the idempotency key) |
+| `session_survey_responses` (005) | UUID | `session_id` FK CASCADE; `question_id`; `response_value` CHECK 1-7; UNIQUE(session_id, question_id) |
+| `survey_questions` (006) | `question_id` | `text`, `category`, `position` UNIQUE, `version` |
+| `global_guardrails` (007) | INT CHECK (id = 1) | singleton: `title`, `content` |
+| `schema_migrations` | `filename` | written by the runner |
 
-**Conventions worth knowing:**
+Migration 008 adds `updated_at` triggers to `agent_conditions`, `contexts`, `sessions` and
+`global_guardrails`.
 
-- `users.current_topic_index` is **0-based**; `topics.order_index` is **1-based**. They join via `order_index = current_topic_index + 1` (`TopicModel.getCurrentTopicForUser`).
-- Migration `008` adds `updated_at` triggers to five tables.
-- Two migration files share the `010_` prefix. `010_create_blacklisted_tokens.sql` is **absent from the runner's hardcoded list**, so the `blacklisted_tokens` table is never created and `models/BlacklistedToken.ts` is dead code (there is also no `/logout` route — logout is purely client-side token removal).
-- Survey question *text* is not in the database; join exported `question_id`s against `src/data/mockData.ts`.
+**Conventions:**
+
+- `sequence` is 1-based over **all** messages of a session: 1 = the participant's auto-sent scenario,
+  2 = the first agent reply, ..., 20 = the tenth reply. The participant message of interaction *n* is
+  `2n - 1`, the reply `2n`. A replayed request derives its historical `interactionCount` as
+  `agentSequence / 2`.
+- `is_locked` becomes true exactly when `interaction_count` reaches 10 (`locked_at` set once);
+  `survey_completed` and `completed_at` are set by the survey submission; `completion_code` exists
+  only for completed sessions.
+- **No table stores names, emails, IP addresses or user agents.** The only participant-supplied
+  identifier is the optional `external_id` (Qualtrics ResponseID from `?rid=`).
+- Session status in the admin API is derived: `in_progress` = not locked; `locked` = locked and survey
+  not completed; `completed` = survey completed.
+
+**Seeds** (`npm run seed`, `seeds/run-seeds.ts`) are idempotent upserts, in order: the 4 agent
+conditions, the 3 contexts (the runner prints the hotel placeholder note), the 16 survey questions
+(`version '1.0'`, positions 1-16), the guardrails singleton (8 context-neutral rules). Re-run after
+editing any seed file.
 
 ## 8. Key flows
 
-### 8.1 Auth / session
+### 8.1 Session lifecycle
 
-- **Register:** `AuthForm` → `POST /api/auth/register` (Zod: email + password ≥ 6) → `UserModel.create` (bcrypt cost 12; random agent 1–9) → `{user, agent, token}` → JWT into `localStorage`.
-- **Login:** `POST /api/auth/login`; generic "Invalid email or password" on both failure modes (no account enumeration) — though the frontend's blanket 401 handler intercepts it, so the user actually sees a "session expired" message. Note: login initializes an empty chat view — history loads via `GET /api/user/state` only on a full page load.
-- **Session restore:** on mount, `Index.tsx` calls `GET /api/user/state`, which returns user, agent, current topic, messages, interaction state, and progress in one payload. ⚠️ Its error handler removes the token on *any* failure — a transient cold-start error logs the participant out.
-- **Logout:** client-side token removal only. No server-side session invalidation exists; issued JWTs remain valid for their full 7 days.
-- **Password reset:** `POST /forgot-password` creates a 24-hour single-use token (only its SHA-256 hash is stored). **No email is ever sent** — the raw token is returned in the API response only when `NODE_ENV=development`. Production password recovery is therefore still non-functional. `POST /reset-password` consumes the token and stamps `users.password_changed_at`, which invalidates all JWTs issued before the reset (checked in the auth middleware).
+```
+POST /api/sessions        -> row created, interaction_count 0          (state: in_progress)
+POST /me/messages x10     -> sequences 1..20, count 10, is_locked      (state: locked)
+POST /me/survey           -> 16 rows, survey_completed, unique code    (state: completed)
+GET  /me at any time      -> the same state; the frontend resumes from it
+```
 
-### 8.2 Chat message (the core loop)
+**Create** (`session.controller.ts:createSession`): body `{ externalId?, force? }` (Zod: `externalId`
+<= 100 chars; `force.agentConditionId` 1-4, `force.contextId` 1-3). `AssignmentService.createAssignedSession`
+picks the cell (section 2; `force` honoured only when `ALLOW_FORCED_ASSIGNMENT=true`, otherwise
+silently ignored, though a malformed `force` is still a `400`) and inserts the row stamped with
+`model = OpenAIService.getModelName()` and `prompt_version = '2.0'`. Response `201` with the public
+state: `sessionId`, `agent: { displayName }`, `context: { id, code, title, scenarioType,
+participantScenario }`, `openingMessage`, `maxInteractions: 10`, counters, `completionCode: null`,
+`messages: []`. Nothing about the condition leaks (an integration test asserts the absence of
+`emotional`, `cognitive`, `hiEI`, `agentPolicy`, ... in the JSON).
 
-1. `MessageInput` → `Index.handleSendMessage` → optimistic temp bubble → `POST /api/chat/message {topicId, content}`.
-2. Backend (`chat.controller.ts:sendMessage`): `findOrCreate` the interaction row; reject if the topic is locked with survey pending; load topic, user, agent, guardrails, and message history; sanitize and **persist the user message**.
-3. `OpenAIService.generateAgentResponse` builds the system prompt (see §9) + last-10 history and calls Chat Completions (30s timeout). ⚠️ **Any OpenAI error is caught and a canned apology is persisted as a normal agent message** — the interaction still counts and nothing in the DB marks it as a fallback. An empty/blank completion likewise becomes a hardcoded "could you provide a bit more detail" reply — a second unmarked fallback path.
-4. Persist the agent reply; `incrementInteraction` (read-then-write; sets `is_locked` when the count reaches 10).
-5. Respond `{userMessage, agentMessage, interactionCount, isLocked, shouldShowSurvey}`; the frontend swaps the temp bubble and opens the survey modal when the topic just locked.
+**Resume** (`GET /me`): the same shape with `messages` ordered by `sequence`.
 
-No transaction wraps the three writes. The message-feedback thumbs in the UI are local state only — never persisted.
+### 8.2 Sending a message (the core loop)
 
-### 8.3 Topic & survey progression
+`session.controller.ts:sendMessage`, body `{ clientMessageId (1-64 chars), content (1-5000 after trim) }`:
 
-- **Literacy survey** → `POST /api/surveys/literacy` → sets `has_completed_literacy_survey` → the frontend then auto-sends the current topic's `stimulus_text` as the participant's first chat message. Because this auto-send is wired only to the literacy-survey submit handler, **it fires for topic 1 only** — topics 2–20 start with an empty chat. On topic 1 the auto-sent stimulus consumes one of the 10 counted interactions, so participants author only 9 messages of their own there versus 10 on topics 2–20; and if the auto-send fails, it fails silently, leaving those participants with no stimulus message at all. The seeded `initial_customer_message` column is never read by any code path.
-- **Topic lock** at 10 interactions → 16-question survey → `POST /api/surveys/post-topic` (Zod: exactly 16 responses, ints 1–7; requires the topic to be locked; 409 if already completed) → upserts the 16 rows, `markSurveyCompleted`, then `unlockNextTopic` increments `users.current_topic_index`.
-- ⚠️ **The final (topic-20) survey always returns 500**: `unlockNextTopic` unconditionally writes `current_topic_index + 1` = 20, violating the `CHECK (0–19)` constraint. Because there is no transaction, the 16 responses and `survey_completed` are already saved — so the data is intact, but the participant sees an error, a retry hits 409 "Survey already completed", and the completion screen is only reached after a page refresh (via `completedTopics >= 20`).
-- ⚠️ Linear progression is **frontend-enforced only**: the chat API accepts any `topicId`, and once a topic's survey is completed the lock check (`is_locked && !survey_completed`) permits unlimited further chat on it.
+1. **Replay check** (no lock yet): if a user message with this `(session_id, client_message_id)`
+   exists, rebuild the original result from it and the agent message at `sequence + 1` and return
+   `200` -- **no writes**, no model call. Even a different `content` with the same id is treated as the
+   same message. `shouldShowSurvey` is recomputed from the *current* `survey_completed`, so a replay
+   after the survey does not resurrect the survey prompt.
+2. **Fail fast on state**: `survey_completed` -> `409 SESSION_COMPLETED`; `is_locked` or count >= 10
+   -> `409 SESSION_LOCKED`.
+3. **Generate the reply outside any database lock**: load the condition, context, guardrails and the
+   full transcript in parallel; build the system prompt (section 9) and the message list (system,
+   whole transcript with `agent` -> `assistant`, new user message); call `OpenAIService.generateReply`.
+   Any failure -- network, API error, 30 s timeout, empty completion -- becomes
+   `502 AGENT_UNAVAILABLE` and **nothing is persisted**. The frontend keeps the draft and retries with
+   the same `clientMessageId`.
+4. **Persist in one transaction under a row lock** (`withTransaction`): `SELECT ... FROM sessions
+   WHERE id = $1 FOR UPDATE`; re-run the replay check under the lock (a concurrent retry with the same
+   id may have won); re-assert the state (a concurrent send with a *different* id may have filled the
+   last slot -- then this request gets `409` and its generated reply is discarded); insert the user
+   message at `sequence = interaction_count * 2 + 1` with the `client_message_id`; insert the agent
+   reply at `sequence + 1`; `UPDATE sessions SET interaction_count = interaction_count + 1, is_locked =
+   (interaction_count + 1 >= 10), locked_at = ...`. Commit.
+5. Respond `{ userMessage, agentMessage, interactionCount, isLocked, shouldShowSurvey }` where
+   `shouldShowSurvey = isLocked && !surveyCompleted`.
 
-### 8.4 Admin / research data
+Because the counter increment and both inserts happen under `FOR UPDATE`, five concurrent sends at
+count 8 yield exactly two `200`s (interactions 9 and 10) and three `409 SESSION_LOCKED`s; the
+database ends at 10 interactions and 20 messages (`tests/sessions.test.ts`). The `UNIQUE
+(session_id, client_message_id)` constraint is the backstop for idempotency.
 
-- The admin dashboard (`/#/admin`, `src/pages/AdminDashboard.tsx`) first asks for the admin API key, verifies it via `GET /api/admin/verify`, and keeps it in `sessionStorage` for the browser session. It then shows aggregate stats, users, messages, and both survey datasets, with client-side CSV export (capped by the 1,000-row message fetch). A rejected key (401) clears the stored key and returns to the entry form.
-- Backend access control is the `x-admin-api-key` header, compared timing-safely against `ADMIN_API_KEY` in `admin.controller.ts:requireAdmin` — fail-closed (admin API disabled with a 403 if the env var is unset; no fallback key, no development bypass), rate-limited at 100 requests / 15 min.
-- `POST /api/admin/migrations/run` and `POST /api/admin/seeds/run` exist to re-run the intelligence-level migration and the agent seed remotely (they were built for the Jan 2026 EQ/CQ format change; the migration endpoint reads a `.sql` file from disk and would fail in a compiled `dist/` deployment since `tsc` doesn't copy `.sql` files).
-- `data_folder_private/` (git-ignored) holds standalone SQL queries mirroring the admin views plus real exported study data.
+### 8.3 Survey and completion code
+
+`session.controller.ts:submitSurvey`, body `{ responses: [{ questionId, value }] }`. Zod checks the
+shape; `validateSurveyAnswers` then requires **exactly 16** answers, ids exactly `post-1` ... `post-16`
+with no duplicates, and integer values 1-7 (`400 VALIDATION_ERROR` otherwise). Then, in one transaction
+with the session row locked `FOR UPDATE`:
+
+- already `survey_completed` -> return `{ completionCode, alreadyCompleted: true }` and **write
+  nothing** (values from the first submission stand);
+- not `is_locked` -> `409 SESSION_NOT_LOCKED`;
+- otherwise upsert the 16 rows (`ON CONFLICT (session_id, question_id) DO UPDATE`), set
+  `survey_completed = TRUE`, `completed_at = COALESCE(completed_at, NOW())`, and assign a **unique
+  completion code**: `utils/completionCode.ts` draws `randomInt(10000, 99999 + 1)` (a uniform integer in
+  `[10000, 99999]`; Node's upper bound is exclusive) and runs
+  `UPDATE sessions SET completion_code = $1` under a `SAVEPOINT`; a unique violation (`23505`) rolls
+  back to the savepoint and tries again, up to 20 attempts.
+
+Response `{ completionCode, alreadyCompleted: false }`. After completion, new messages are refused
+with `409 SESSION_COMPLETED`; replays of earlier ids still return `200`.
+
+### 8.4 Assignment
+
+`services/assignment.service.ts`. `SessionModel.countStartedPerCell` returns all 12 cells
+(`agent_conditions CROSS JOIN contexts LEFT JOIN sessions`) with their started counts, including
+zeros; it throws if nothing is seeded. **Random** picks a cell uniformly (`crypto.randomInt`).
+**Balanced** runs inside a transaction that first takes `pg_advisory_xact_lock(7120002)`, so concurrent
+creations see fresh counts and 12 simultaneous arrivals land in 12 distinct cells
+(`tests/assignment.test.ts`). **Forced** (`ALLOW_FORCED_ASSIGNMENT=true` only) verifies the cell
+exists and inserts directly. The admin dashboard reports the active mode.
+
+### 8.5 Admin and research data
+
+- **Dashboard** (`GET /api/admin/dashboard`): totals (`sessions`, `completed`, `locked`, `inProgress`,
+  `messages`, `surveyResponses`), the 12 cells with `started` / `completed`, and `assignmentMode`.
+- **Lists** (`/sessions`, `/messages`, `/surveys`): `limit` default 100 / max 1000, `offset`, and
+  filters; every integer parameter is validated with a regex (`400` on `abc`, `-1`, `NaN`), `sessionId`
+  must be a UUID, `status` must be one of the three values. Ordered newest first.
+- **Detail** (`/sessions/:id`): the session, its transcript by `sequence`, and its survey responses by
+  item number.
+- **Export** (`/export?type=sessions|messages|surveys`): headers are flushed first (`text/csv`,
+  `Content-Disposition: attachment; filename="study2-<type>-<date>.csv"`, `Cache-Control: no-store`),
+  then rows are streamed in **keyset-paginated batches of 1000** with back-pressure (`drain`).
+  Ordering: sessions by `(created_at, id)`; **messages by session start, then `session_id`, then
+  `sequence`** (a participant message and its reply share one transaction timestamp, so ordering by
+  message time alone would interleave them wrongly); surveys by `(created_at, id)`. Cursors carry the
+  timestamp as `::text` to keep microsecond precision; a cursor that fails to advance aborts the
+  stream rather than looping. `csvField` quotes per RFC 4180 and prefixes strings that start with
+  `=`, `+`, `-`, `@`, TAB or CR with a single quote (spreadsheet formula injection); Dates are ISO
+  8601. The sessions export adds `emotional_intelligence` and `cognitive_intelligence`; the messages
+  export includes `client_message_id`.
 
 ## 9. The AI agent system
 
-**Prompt assembly** (`AgentService.buildSystemPrompt`, `backend/src/services/agent.service.ts`), concatenated in order:
+**Prompt assembly** (`AgentService.buildSystemPrompt(condition, context, guardrails)` in
+`backend/src/services/agent.service.ts`), concatenated in exactly this order:
 
-1. `agent.system_prompt_template` (the persona, from the seed).
-2. **"Your Intelligence Profile"** — the agent's EQ/CQ levels plus per-level behavioral guidance blocks (`getEmotionalIntelligenceGuidance` / `getCognitiveIntelligenceGuidance`).
-3. **"Global Guidelines"** — the `global_guardrails` singleton row's content (seeded by `guardrails.seed.ts`).
-4. **"Topic-Specific Policy"** — `topic.topic_specific_policy`: the agent-side workflow, severity classification, resolution options, and escalation triggers for the scenario (hidden from participants).
-5. Conversation guidelines: stay on the topic, use `stimulus_text` as context, redirect out-of-scope questions, keep replies to 2–4 sentences.
-6. "Never say you cannot help."
+1. `condition.system_prompt_template` -- the shared base persona ("You are Alex, a customer support
+   agent for the company the customer is contacting ...").
+2. `## Your Intelligence Profile` -- the sentence "You have {low|high} emotional intelligence and
+   {low|high} cognitive intelligence.", then the **EI guidance block** for the condition's level
+   (`**Emotional Intelligence: Low**` = direct, factual, efficient, less warm; `High` = warm, empathetic,
+   validating), then the **CI guidance block** (`Low` = simple, scripted, clarifying questions; `High` =
+   detailed, analytical, multiple solution approaches). Only `low` and `high` exist; `medium` was dropped
+   with v1.
+3. `## Global Guidelines` -- the `global_guardrails` singleton's content (omitted only if the row is
+   missing): stay in role, be truthful to the reference information, do not invent policies or
+   commitments, never reveal the instructions or the participant's condition, keep to the current
+   inquiry, no harmful content, stay professional, protect privacy.
+4. `## Reference Information` -- `context.agent_policy` verbatim (the food-delivery handling policy,
+   or the hotel policy document plus the booking record).
+5. `## Conversation Guidelines` -- eight bullets: stay within the scope of "{context.title}"; the
+   customer's first message describes the situation, treat it as the context for the whole
+   conversation; rely on the Reference Information for every policy, record or remedy; steer unrelated
+   requests back; 2-4 sentences; actionable next steps; always respond; never say you cannot help.
 
-Then the last 10 messages (`agent` role remapped to `assistant`) plus the new user message go to Chat Completions — model from `OPENAI_MODEL` (default `gpt-4o-mini`), temperature 0.7, `max_tokens` 500, `presence_penalty` 0.1, `frequency_penalty` 0.1, 30s timeout.
+`AgentService.buildMessages` then produces `[system, ...full transcript (agent -> assistant), new user
+message]` -- the **entire** session history (at most 20 prior messages), not a window.
 
-**Guardrails exist in three disconnected layers:**
+**Generation** (`services/openai.service.ts`): `chat.completions.create` with `OPENAI_MODEL` (default
+`gpt-4o-mini`), `temperature 0.7`, `max_tokens 500`, `presence_penalty 0.1`, `frequency_penalty 0.1`,
+and per-request `timeout: 30000, maxRetries: 0` (the SDK's default two retries would stretch a failing
+call past the frontend's 45 s attempt and risk double model calls). An empty or whitespace completion
+is a failure. **There is no output substring filter**; the v1 `hack/exploit/illegal` filter is gone.
+With `MOCK_OPENAI=true` the service returns `"[mock reply to: <first 60 chars of the last user
+message>]"` and reports model `mock` -- used by every test and available for local development
+without a key.
 
-| Layer | Source | Status |
-|---|---|---|
-| Prompt-injected | `global_guardrails` DB row | The only layer the model actually obeys |
-| Output filter | `openai.service.ts` | Naive substring check — a reply containing "hack"/"exploit"/"illegal"/"harmful" is replaced wholesale with the out-of-scope message (false-positives on e.g. "hackathon") |
-| Displayed to participants | `globalGuardrails` in `src/data/mockData.ts` | **Hardcoded** — `GET /api/guardrails` exists but has no frontend caller, so displayed policy can drift from enforced policy |
-
-There is no input-side content moderation (only the character-level sanitization of §6).
+**Placeholder hygiene:** the hotel context is marked as a placeholder **only in code** (comments and
+the `HOTEL_CONTEXT_PLACEHOLDER_NOTE` constant that `npm run seed` logs). Neither `participant_scenario`
+nor `agent_policy` may contain words like "placeholder", "fabricated" or "fictional", because
+`agent_policy` is pasted into the prompt and a model told its material is fake can say so to
+participants. A unit test enforces this for all four conditions.
 
 ## 10. Configuration
 
-**Backend** (`backend/.env`, template in `backend/env.example`):
+**Backend** (`backend/.env`, template `backend/env.example`; all read from `process.env`, switches at
+call time so tests can toggle them):
 
 | Variable | Required | Notes |
 |---|---|---|
-| `DATABASE_URL` | ✅ (startup exit) | pg connection string. TLS certificate verification is **on by default** for Render/production connections; `DATABASE_CA_CERT` supplies a custom CA (PEM), and `DATABASE_SSL_NO_VERIFY=true` is a last-resort escape hatch that restores the old unverified behavior |
-| `OPENAI_API_KEY` | ✅ (startup exit) | Also throws at import time in `config/openai.ts` |
-| `JWT_SECRET` | ✅ (startup exit) | HS256 signing key |
-| `PORT` | – | default 3000 |
-| `NODE_ENV` | – | gates CORS mode, error detail, and password-reset token echo |
-| `FRONTEND_URL` | – | CORS allowlist entry; if unset in production, any `.netlify.app`-containing origin is accepted instead |
-| `ADMIN_API_KEY` | required for admin routes | **Fails closed**: if unset, every `/api/admin/*` request gets a 403 (no fallback key, no dev bypass). Researchers enter this value at `/#/admin` |
-| `OPENAI_MODEL` | – | default `gpt-4o-mini`; **not listed in env.example** |
+| `DATABASE_URL` | yes (startup exit) | pg connection string. SSL is required when the URL contains `render.com` or `NODE_ENV=production`, with certificate verification **on**; `DATABASE_CA_CERT` (PEM) supplies a custom CA and `DATABASE_SSL_NO_VERIFY=true` is a last-resort escape hatch. Pool: max 20, 10 s connect timeout |
+| `ADMIN_API_KEY` | yes (startup exit) | Admin API disabled (403) if unset at request time; researchers enter this value at `/#/admin` |
+| `OPENAI_API_KEY` | yes unless `MOCK_OPENAI=true` | Lazy client; warned if it does not start with `sk-` |
+| `OPENAI_MODEL` | no | default `gpt-4o-mini`; stamped on each session |
+| `MOCK_OPENAI` | no (`false`) | deterministic replies, no network; tests force `true` |
+| `ASSIGNMENT_MODE` | no (`random`) | `random` or `balanced` |
+| `ALLOW_FORCED_ASSIGNMENT` | no (`false`) | honour `force` on session creation -- dev/test/pilot only |
+| `SESSION_CREATE_LIMIT_PER_HOUR` | no (`60`) | per-IP cap on `POST /api/sessions`; raise for shared-IP settings |
+| `MESSAGE_LIMIT_PER_MINUTE` | no (`30`) | per-session cap on messages |
+| `DISABLE_RATE_LIMITS` | no (`false`) | tests only |
+| `FRONTEND_URL` | no | exact-match CORS origin, no trailing slash (`http://localhost:8080` locally) |
+| `PORT` | no (`3000`) | |
+| `NODE_ENV` | no | `production` enables SSL + hides error detail; `development` logs queries and validates the OpenAI key at startup; `test` is set by the test harness |
 
-**Frontend:** a single env var, `VITE_API_URL` (default `http://localhost:3000`, in `src/lib/api.ts`), baked in at build time — on Netlify it must be set in site settings before the build. The dev server itself runs on port **8080** (pinned in `vite.config.ts`); `backend/env.example` ships `FRONTEND_URL=http://localhost:5173`, which mismatches that port but works locally only because development-mode CORS allows all origins.
+`JWT_SECRET` is **no longer used**. Constants that are not configurable live in
+`backend/src/config/study.ts`: `MAX_INTERACTIONS = 10`, `PROMPT_VERSION = '2.0'`, the 16 question ids,
+the 1-7 range, the 10000-99999 code range and 20 collision attempts, the default model. The frontend
+never hardcodes these; it reads `maxInteractions` from API responses.
+
+**Frontend:** one build-time variable, `VITE_API_URL` (default `http://localhost:3000`). On Netlify it
+must be set in the site's environment before the build; changing it requires a rebuild. The Vite dev
+server is pinned to port **8080** (`vite.config.ts`), matching `FRONTEND_URL` in `env.example`
+(outside production any localhost port passes CORS anyway).
 
 ## 11. Deployment
 
-**Backend → Render** (`render.yaml`, guides in the repo root):
+The two halves deploy from **two different GitHub repositories**, both from branch `main`:
 
-- Web service with **Root Directory = `backend/`**; build `npm install && npm run build` (a `prebuild` script forces `npm install --include=dev` because Render prunes devDependencies); start `npm start` (`node dist/app.js`).
-- **Migrations are a manual post-deploy step**: `npm run migrate` from the Render shell. This runs via `tsx` against `src/` — the compiled `dist/` contains no `.sql` files.
-- Seeding likewise: `npm run seed` (agents → topics → guardrails; topics require migration 011's columns to exist first).
-- Free-tier cold starts are why the frontend has the `/health` wait machinery.
+| Half | Repository | Platform | Target |
+|---|---|---|---|
+| Backend | `Elham-yaz/persona-glimmer-front` (git remote `origin`) | Render web service `persona-glimmer-backend`, root dir `backend/` | `https://persona-glimmer-backend-kmrl.onrender.com` |
+| Frontend | `surjray/persona-glimmer-front` (git remote `surjray`) | Netlify | `https://zesty-heliotrope-b3362c.netlify.app` |
 
-**Frontend → Netlify** (`netlify.toml`):
+A change that touches both halves must be pushed to both repositories.
 
-- Build `npm run build`, publish `dist/`, SPA redirect `/* → /index.html 200` (duplicated in `public/_redirects`).
-- Routing is hash-based, so deep links work regardless of redirect config.
-- Security headers are set; there is no CSP.
+**Backend -> Render** (`render.yaml`, Blueprint): Node, region Oregon, `rootDir: backend`, build
+`npm install && npm run build` (the `prebuild` script forces `npm install --include=dev` because Render
+prunes devDependencies and `tsx`/TypeScript are needed for the build and the CLI scripts), start
+`npm start` (`node dist/server.js`), health check `/health`. Non-secret env vars are in the file
+(`NODE_ENV=production`, `PORT=3000`, `ASSIGNMENT_MODE=random`, `ALLOW_FORCED_ASSIGNMENT="false"`,
+`OPENAI_MODEL=gpt-4o-mini`); `DATABASE_URL`, `OPENAI_API_KEY`, `ADMIN_API_KEY` and `FRONTEND_URL` are set
+as secrets in the Render dashboard. Free-tier cold starts (30-60 s) are why the frontend has the
+`/health` wait.
+
+**Database provisioning is a manual CLI step** and never part of the build: after a deploy against a
+fresh database, run `npm run migrate` and `npm run seed` in the service's **Shell** tab (or a one-off
+job), or locally against the *external* connection string. `npm run db:reset` on production likewise
+runs only from a shell with `CONFIRM_RESET=<database name>`; there is no HTTP endpoint for any of
+these. The scripts run through `tsx` from `src/` because `tsc` does not copy `.sql` files into `dist/`.
+
+**Frontend -> Netlify** (`netlify.toml`): build `npm run build`, publish `dist/`, SPA redirect
+`/* -> /index.html 200` (also in `public/_redirects`), security headers (no CSP). `VITE_API_URL` must
+point at the Render URL. Deploy previews on `*.netlify.app` are accepted by the backend's CORS rule.
+
+Neither platform runs tests or lint before deploying; a broken push to `main` goes live.
 
 ## 12. Operational scripts
 
+All run from `backend/`.
+
 | Script | Command | Notes |
 |---|---|---|
-| Migrate | `cd backend && npm run migrate` | Hand-rolled runner, hardcoded file list — **new migrations must be added to the array in `run-migrations.ts`** |
-| Seed | `cd backend && npm run seed` | Agents, topics, guardrails (upserts) |
-| Env check | `cd backend && npx tsx check-env.ts` | Prints which env vars are set |
-| DB connectivity | `cd backend && npx tsx test-db-connection.ts` | Checks connection + core tables |
-| **Reset DB** | `cd backend && npx tsx src/migrations/reset-database.ts` | ☠️ **Drops a hardcoded list of 19 tables — the entire current schema plus legacy tables — with CASCADE, immediately: no confirmation, no environment guard, no dry-run.** It runs at module import and acts on whatever `DATABASE_URL` points at; individual drop failures are logged but swallowed (the run still exits 0), and the script ships compiled in `dist/`. Treat as radioactive. |
+| Migrate | `npm run migrate` | Applies unrecorded `NNN_*.sql` files, one transaction each, records them in `schema_migrations`; idempotent |
+| Seed | `npm run seed` | Upserts conditions, contexts, survey questions, guardrails; safe to re-run |
+| **Reset** | `CONFIRM_RESET=<db name> npm run db:reset` | Prints host + database, then `DROP SCHEMA public CASCADE; CREATE SCHEMA public` (falls back to dropping tables one by one). **Refuses** (exit 1, touches nothing) unless `CONFIRM_RESET` equals the database name parsed from `DATABASE_URL`; exit 1 on any failure. Follow with `migrate` and `seed` |
+| Env check | `npx tsx check-env.ts` | Prints which required variables are set (aware of `MOCK_OPENAI`) |
+| DB connectivity | `npx tsx test-db-connection.ts` | Connects, checks the v2 tables exist, prints row counts |
+| Dev server | `npm run dev` | `tsx watch src/server.ts` |
+| Build / start | `npm run build` / `npm start` | `tsc` to `dist/`, `node dist/server.js` |
+| Tests / lint | `npm test`, `npm run test:watch`, `npm run lint` | see section 13 |
+
+Typical fresh local database:
+
+```bash
+export DATABASE_URL=postgresql://localhost:5432/persona_glimmer_dev
+CONFIRM_RESET=persona_glimmer_dev npm run db:reset
+npm run migrate && npm run seed
+```
 
 ## 13. Testing
 
-**There is effectively no automated testing.** The only test in the repository is the Lovable template's placeholder (`expect(true).toBe(true)` in `src/test/example.test.ts`); `npm test` reports a misleading green. The backend declares a `vitest` test script but has zero test files and no config. There is no CI (no GitHub Actions, no hooks) — nothing runs tests or lint before a deploy. Vitest, Testing Library, and jsdom are installed and configured on the frontend (`vitest.config.ts`, `src/test/setup.ts`), so adding tests requires no new setup.
+**Backend** (`backend/tests/`, Vitest + supertest, `npm test`): the global setup (`global-setup.ts`)
+drops and recreates the `public` schema, migrates and seeds a **local** database
+(`DATABASE_URL` if set, else `postgresql://localhost:5432/persona_glimmer_test`) and **refuses to run
+against any host other than `localhost` / `127.0.0.1` / `::1`**. Every worker forces `NODE_ENV=test`,
+`MOCK_OPENAI=true`, `DISABLE_RATE_LIMITS=true` and a throwaway `ADMIN_API_KEY`; no network is needed.
+Files run one at a time against the shared database (`fileParallelism: false`), and each file binds its
+own HTTP server explicitly to `127.0.0.1` (avoids a macOS wildcard-port hijack seen at ~1 in 2000
+requests).
+
+| File | Covers |
+|---|---|
+| `sessions.test.ts` | Contract shape and blinding of `POST /api/sessions`; `401 SESSION_INVALID` cases; opening message = interaction 1 with sequences 1-2; validation; lock at 10 and `409` on the 11th; replay with same and different body; **5 concurrent sends at count 8 -> exactly 10**; `502 AGENT_UNAVAILABLE` persists nothing and the same id then succeeds; survey `409 SESSION_NOT_LOCKED`, all `400` shapes, exactly 16 rows, unique code, idempotent re-submit, `409 SESSION_COMPLETED` afterwards, replay after completion |
+| `admin.test.ts` | `401`/`403` behaviour; dashboard totals and 12 cells; session list filters and guarded pagination; detail view; message/survey lists; CSV headers, RFC 4180 quoting, formula neutralisation, **every row exactly once across 1000-row page boundaries including equal timestamps**; a representative set of removed v1 endpoints -> `404` (requested with the admin key, so the admin paths get past `requireAdmin`); the three rate limits (with `SESSION_CREATE_LIMIT_PER_HOUR` overridden to 5) |
+| `assignment.test.ts` | 12 cells exposed; random picks valid cells; balanced always fills a least-populated cell, also under 12 concurrent creations; `force` honoured only with the flag; malformed `force` -> `400` |
+| `migrations.test.ts` | Exactly the eight v2 files in order; idempotent runner; only v2 tables exist; `updated_at` trigger; the reset CLI refuses without the exact `CONFIRM_RESET`, resets with it, exits 1 on failure |
+| `rate-limit-config.test.ts` | `DEFAULT_SESSION_CREATE_LIMIT_PER_HOUR = 60` and `DEFAULT_MESSAGE_LIMIT_PER_MINUTE = 30`; positive-integer env overrides honoured; malformed values (`0`, `-3`, `abc`, empty, `1.5x`) fall back to the defaults |
+| `unit.test.ts` | Prompt section order and per-condition guidance; shared template has no EI/CI wording; message list shape; mock and real OpenAI paths (empty completion -> `AGENT_UNAVAILABLE`, no output filter, `timeout 30000 / maxRetries 0`); assignment helpers; CSV field rules; code range; `DATABASE_URL` parsing; hotel placeholder hygiene; SHA-256 fidelity of contexts 1-2 and the 16 items to the v1 baseline |
+
+**Frontend** (`src/test/`, Vitest + jsdom + Testing Library, `npm test` at the repo root):
+`study.test.tsx` (landing -> Begin -> opening auto-sent exactly once; `rid`/`force` forwarded; resume
+into survey/completion; `AGENT_UNAVAILABLE` keeps draft and id; stale session cleared; lock -> survey;
+`409` re-sync; timeout not auto-retried; copy button; "Reload code"), `adminDashboard.test.tsx` (key
+verification, totals and grid, detail view, export with key header, Refresh keeps filters, rejected
+keys), `api.test.ts` (retry policy: bare `502` retried, enveloped `502` not, 45 s single attempt for
+sends, `401`/`429` mapping), `entryParams.test.ts`. `src/test/setup.ts` polyfills `matchMedia`,
+`scrollIntoView` and an in-memory `localStorage`/`sessionStorage`.
+
+There is still **no CI**: nothing runs these suites before a deploy.
 
 ## 14. Known issues & code health
 
-Ranked by severity. Verified against source as of early 2026.
+### Resolved by the v2 rewrite
 
-### Critical — security / data exposure
+The long v1 issue list (see the v1 guide at tag `snapshot-2026-08-30`) is closed by construction:
+the admin key is no longer in the bundle and the admin API fails closed with timing-safe comparison
+and a rate limit; there is no client-side admin login; CORS parses the origin; database TLS is verified;
+password recovery, JWT invalidation and the token blacklist are moot (no accounts); the agent matrix is
+a clean 2 x 2 with one shared template (no contradictory personas); the final-survey `500` and every
+progression loophole are gone (one context per session, cap enforced under `FOR UPDATE`); a failed model
+call persists nothing instead of a canned apology; message sends are idempotent; the stimulus opening
+is uniform across contexts; the substring output filter, the unpersisted thumbs feedback, the GETs with
+write side effects, the unguarded `parseInt`s, the remote migration/seed endpoints and the dead-code
+inventory are removed; migrations are tracked and transactional; the reset script requires
+confirmation; survey item text is in the database; guardrails have one source (they are no longer shown
+to participants, so displayed-vs-enforced drift cannot occur); and the platform has real test suites.
 
-> **Status (Aug 2026):** issues 1, 2, 4, and 6 below were fixed in code; 5 was partially fixed (delivery is still missing); 3 requires credential rotation by the owner. The original descriptions are kept for history, each with its resolution.
+### Open items
 
-1. ~~**The admin API is effectively public.**~~ **Fixed.** Previously the admin key was hardcoded in the shipped frontend bundle and printed in repo docs, with a fallback dev key, a development-mode bypass, no rate limit, and a non-timing-safe comparison. Now: `requireAdmin` fails closed (403 on every request if `ADMIN_API_KEY` is unset), compares timing-safely, admin routes are rate-limited (100/15 min), the key is no longer in the bundle (researchers enter it at `/#/admin`, verified via `GET /api/admin/verify`, held in `sessionStorage`), and the key value was redacted from the docs. ⚠️ The old key remains in git history — **set a fresh `ADMIN_API_KEY`**; the old value no longer works anywhere once the new backend deploys.
-2. ~~**Admin "login" is client-side.**~~ **Fixed.** The hardcoded email/password check in `Index.tsx` and the truthy-localStorage route guard are gone; the dashboard now gates itself on a server-verified admin key.
-3. **A live OpenAI key is recoverable from git history** (committed via deployment docs; the incident was "resolved" with GitHub's allow-secret URL rather than rotation — see `GIT_SECRET_FIX.md`). Locally, `docs/safe_keeping.md` (git-ignored, never committed) holds a plaintext DB connection string and API key. **Still open: rotate both credentials** (OpenAI dashboard → revoke + recreate the key; Render → reset the database password), then update the Render env vars.
-4. ~~**CORS origin checks are bypassable.**~~ **Fixed.** Origins are now parsed as URLs and checked by exact match against `FRONTEND_URL` or an exact hostname-suffix test for `.netlify.app` over HTTPS — `https://x.netlify.app.evil.com` is rejected. (Requests with no `Origin` header are still allowed, as CORS only governs browsers.)
-5. **Password recovery — partially fixed.** Reset tokens are now stored as SHA-256 hashes, and a reset stamps `users.password_changed_at` (migration 012), invalidating all previously issued JWTs via the auth middleware. Still open: **no email delivery exists**, so production recovery remains non-functional (the raw token is echoed only when `NODE_ENV=development`).
-6. ~~**Database TLS verification is disabled.**~~ **Fixed.** Certificate verification is on by default; `DATABASE_CA_CERT` supplies a custom CA and `DATABASE_SSL_NO_VERIFY=true` is a last-resort escape hatch. If the first deploy after this change fails to connect, provide the CA or (temporarily) set the escape hatch.
+1. **Hotel context content is a placeholder.** `contexts.seed.ts` id 3 (policy document, booking
+   record, scenario) is fabricated for development and pilots. Replace it with the team's material
+   (one file edit, then `npm run seed`) before real data collection in that context.
+2. **`post-6` wording for the informational context.** "The agent resolved my issue to my
+   satisfaction." presupposes a service problem, which the hotel inquiry does not have. The item is
+   currently asked verbatim in all three contexts; the team must decide whether to keep, reword or make
+   it context-conditional (changing it means editing `survey_questions.seed.ts`, `src/data/surveyQuestions.ts`
+   and the fidelity hash in `unit.test.ts`).
+3. **No email or PII, by design.** Participants cannot be contacted or de-duplicated by the platform;
+   the only identifiers are the completion code and the optional `external_id`. Repeat participation is
+   only weakly discouraged (a browser with a completed session in `localStorage` is shown its code again
+   and cannot start a new session without clearing storage).
+4. **Two-repository deployment.** The backend deploys from `Elham-yaz/main` (Render) and the frontend
+   from `surjray/main` (Netlify). Every change must be pushed to both, and the two can drift.
+5. **`*.netlify.app` CORS allowance.** Any HTTPS origin whose hostname ends in `.netlify.app` may make
+   browser requests to the API. This is what lets deploy previews work, but it also means any other
+   Netlify site could call the participant endpoints from a browser. The session bearer is not a cookie
+   and is never sent automatically, so the practical exposure is low; tightening it means setting
+   `FRONTEND_URL` and removing the suffix rule in `app.ts`.
+6. **Phantom sessions on retried creation.** `POST /api/sessions` is not idempotent, and the frontend
+   retries it on bare gateway errors, network errors and timeouts (cold starts). If the server created
+   the row but the response was lost, the retry creates a second session; the participant continues in
+   the second one and the first stays at `interaction_count = 0`. Such rows inflate `started` counts
+   (and, in `balanced` mode, the cell counts used for assignment). Filter them out in analysis.
+7. **Concurrent sends from one session can use a stale transcript.** The model call runs *before* the
+   row lock, on the transcript read at that moment. Two different `clientMessageId`s in flight at once
+   (two tabs, or a client that ignores the disabled input) each get a reply generated without the
+   other's exchange; the transaction still keeps counts and sequences consistent and never exceeds 10.
+   The UI disables the input while a send is pending, so this does not happen in normal use.
 
-### High — research validity
+### Minor notes
 
-7. **The agent matrix is not the documented 3×3 factorial** (three (med,med) cells; (med,high) and (high,med) missing) and four agents' persona templates contradict their stored EQ/CQ levels, giving the model conflicting instructions (§2).
-8. **The topic-20 survey always 500s** (CHECK-constraint violation in `unlockNextTopic`); data is saved but every participant's study ends on an error (§8.3).
-9. **OpenAI failures silently pollute the data**: canned apologies (and a hardcoded "more detail" reply for empty completions) stored as genuine agent messages, still consuming an interaction, with no marker (§8.2).
-10. **Non-idempotent retry**: the frontend retries `POST /api/chat/message` up to 5×; a slow OpenAI call (>30s) can duplicate message pairs and interaction counts.
-11. **Progression loopholes**: no server-side current-topic enforcement; completed topics accept unlimited extra chat; `unlockNextTopic` advances the index for *any* topic's survey, not specifically the current one.
-12. **Stimulus asymmetry**: only topic 1 auto-sends the stimulus message; `initial_customer_message` is seeded but unused (§8.3).
-13. **Message feedback (thumbs) is never persisted** — no endpoint or column exists.
-14. **The substring output filter** can replace legitimate agent replies, contaminating agent-behavior data.
-15. **Silent truncation**: chat messages over 5,000 characters are truncated before storage and before the LLM sees them, with no signal to the participant (and no client-side max length).
-
-### Medium — correctness / robustness
-
-16. **No transactions** around multi-write operations (chat's 3 writes; the survey's 16 upserts + completion + unlock) and several read-then-write races (`findOrCreate`, `incrementInteraction`, registration email check) that can 500 or overshoot under concurrency.
-17. **Session fragility**: `loadUserState` removes the token on any error, so a cold-start blip logs participants out; login doesn't load chat history (only a page reload does).
-18. **GETs with write side effects**: `/api/user/state`, `/api/chat/status/:topicId`, and `/api/topics/with-status` all call `findOrCreate` (the last creates all 20 interaction rows via N+1 queries).
-19. **Admin input handling**: unchecked `parseInt` on `limit`/`offset`/`topicId` (NaN → pg errors), no maximum limit, and a literacy `questionId` longer than VARCHAR(100) causes a 500.
-20. **`validate()` discards Zod's parse output**, so transforms/defaults never take effect; several wrong status codes (400 where 401/404 belong).
-21. **The remote migration endpoint would fail in production builds** (no `.sql` files in `dist/`).
-
-### Documentation drift
-
-The root-level `*_FIX.md` / `*_SUMMARY.md` files are historical logs, not current documentation — several are now wrong. Worst offenders: `LOGOUT_IMPLEMENTATION_SUMMARY.md` describes a server-side logout that does not exist (the entire token-blacklist stack is dead code); `docs/DATABASE_SCHEMA.md` is stale on at least five counts (numeric intelligence levels, missing migrations 009–011); `DISCREPANCIES_CHECK.md` calls `mockData.ts` unused when it is the live source of both survey banks and the displayed guardrails; `docs/API_DOCUMENTATION.md`'s rate limits and question-ID examples don't match the code.
-
-### Dead code inventory
-
-`backend/src/utils/intelligenceLevel.ts`, `BlacklistedTokenModel` + its migration + `cleanupExpiredTokens`, `src/components/auth/AgentIntroduction.tsx` (contains a NaN bug: `'medium'/10`), `guardrailApi.getGuardrails`, `chatApi.getStatus`, `surveyApi.getLiteracyStatus`, `topicApi.getById`, `mockData.ts`'s `agents`/`topics`/`mockAgentResponses`, `TopicListModal`'s topic-click handler (never wired), `SurveyModal.onClose`, `src/hooks/use-mobile.tsx`, `src/components/NavLink.tsx`, the mounted-but-unused QueryClient, and `topics.initial_customer_message`.
+- `validate()` discards Zod's parse output; controllers re-read `req.body`. Harmless today (no
+  transforms/defaults are relied upon) but easy to trip over.
+- `is_fallback` is always `false` in v2; the column and the admin "(fallback)" marker are kept for
+  compatibility.
+- `sessions.model` is stamped at creation from configuration, not from the `model` string the API
+  reports per completion (which can carry a dated suffix).
+- The admin grid hardcodes the id ranges 1-4 and 1-3 for layout; codes and counts come from the API.
 
 ## 15. Maintenance guide: where to change things
 
 | Change | Where |
 |---|---|
-| Add/edit a topic or policy | `backend/src/seeds/topics.seed.ts` + [Policy_Pairs_Reference_Document.md](../Policy_Pairs_Reference_Document.md). DDL CHECKs pin ids/order to 1–20 (topic 21 needs a migration); `totalTopics: 20` is hardcoded in `user.controller.ts` and `Index.tsx` |
-| Change an agent persona or EQ/CQ level | `backend/src/seeds/agents.seed.ts`, then `npm run seed`; per-level guidance text in `agent.service.ts` |
-| Change the system prompt structure | `AgentService.buildSystemPrompt` in `backend/src/services/agent.service.ts` |
-| Change the LLM model / params | `OPENAI_MODEL` env var (or `config/openai.ts`); temperature/max_tokens in `openai.service.ts` |
-| Change the 10-interaction cap | Three places: `UserTopicInteraction.ts` (`>= 10`), `chat.controller.ts` (`maxInteractions`), `Index.tsx` (`MAX_INTERACTIONS`) — plus a `/10` literal in `TopicList.tsx` |
-| Edit survey questions | `src/data/mockData.ts` (both banks); the backend stores IDs only, but the Zod schema in `survey.controller.ts` pins the post-topic count to exactly 16 |
-| Edit guardrails | **Two disconnected places**: `backend/src/seeds/guardrails.seed.ts` (what the model obeys) and `mockData.ts`'s `globalGuardrails` (what participants see) |
-| Auth / JWT behavior | `backend/src/middleware/auth.middleware.ts`, `auth.controller.ts`, token helpers in `src/lib/api.ts` |
-| Chat pipeline | `chat.routes.ts` → `chat.controller.ts:sendMessage` → `openai.service.ts` |
-| Progression logic | `UserTopicInteraction.ts` (`incrementInteraction`, `unlockNextTopic`), `topic.controller.ts`, and the `Index.tsx` state machine |
-| Admin / export | `admin.controller.ts` (`requireAdmin` at the top), `AdminDashboard.tsx`, `adminApi` in `src/lib/api.ts` |
-| Schema changes | New `.sql` file in `backend/src/migrations/` **plus** an entry in `run-migrations.ts`'s hardcoded array (forgetting this is how the blacklist table was lost); then run `npm run migrate` manually on Render |
-| Deployment config | `backend/package.json` scripts, `render.yaml`, `netlify.toml`, `VITE_API_URL` in Netlify site settings |
-| Participant UI flow | `src/pages/Index.tsx` (everything routes through it); presentational components in `src/components/{chat,auth,survey,layout}/` |
+| Replace the hotel content (or edit a food context) | `backend/src/seeds/contexts.seed.ts`, then `npm run seed`. Keep placeholder/fabricated wording out of prompt-visible text (`unit.test.ts` checks) |
+| Change the agent persona or the EI/CI guidance | Base template and display name in `seeds/agent_conditions.seed.ts` (then `npm run seed`); guidance blocks in `services/agent.service.ts` |
+| Change the prompt structure | `AgentService.buildSystemPrompt`; update the order test in `tests/unit.test.ts` and bump `PROMPT_VERSION` in `config/study.ts` |
+| Change the model or generation parameters | `OPENAI_MODEL` env var; temperature/max_tokens/penalties in `services/openai.service.ts`; timeout in `config/openai.ts` |
+| Change the 10-interaction cap | `MAX_INTERACTIONS` in `backend/src/config/study.ts` **and** the `CHECK (interaction_count BETWEEN 0 AND 10)` in `003_create_sessions.sql` (new migration). The frontend reads the value from the API |
+| Edit survey items | `backend/src/seeds/survey_questions.seed.ts` (bump `SURVEY_VERSION`), `src/data/surveyQuestions.ts`, the count/ids in `config/study.ts` if the number changes, and the fidelity hash in `unit.test.ts` |
+| Edit the guardrails | `backend/src/seeds/guardrails.seed.ts`, then `npm run seed` (single source; nothing is shown to participants) |
+| Assignment behaviour | `ASSIGNMENT_MODE` env; algorithms in `services/assignment.service.ts` |
+| Rate limits | `SESSION_CREATE_LIMIT_PER_HOUR`, `MESSAGE_LIMIT_PER_MINUTE` env (defaults in `config/study.ts`); admin limit in `routes/admin.routes.ts` |
+| Session / message / survey logic | `controllers/session.controller.ts` (+ `models/Session.ts`, `models/SessionMessage.ts`, `utils/completionCode.ts`) |
+| Admin API, exports, CSV columns | `controllers/admin.controller.ts` (`EXPORT_SPECS`), `routes/admin.routes.ts`; UI in `src/pages/AdminDashboard.tsx`, client in `adminApi` (`src/lib/api.ts`) |
+| Schema changes | Add `backend/src/migrations/009_*.sql` (next number; one file = one transaction), run `npm run migrate` locally and on Render; update the file list assertion in `tests/migrations.test.ts` |
+| Participant UI flow / copy | `src/pages/Study.tsx` (landing, completion and the state machine), `src/components/{chat,layout,survey}/` |
+| Qualtrics hand-off | `src/lib/entryParams.ts` (`rid`), `sessions.external_id`; completion screen text in `Study.tsx` |
+| CORS / allowed origins | `backend/src/app.ts`, `FRONTEND_URL` env |
+| Deployment config | `render.yaml`, `netlify.toml`, `backend/package.json` scripts, `VITE_API_URL` in Netlify |
+
+## 16. Study 1 (v1) history
+
+The v1 platform (email/password accounts, JWT, 9 agents on a broken 3 x 3, 20 sequential topics with a
+16-item survey each, AI-literacy survey) was operated from January to August 2026 and retired on
+2026-09-06.
+
+- **Code:** git tag `snapshot-2026-08-30` (also branch `snapshot/main-2026-08-30-pre-deep-changes`)
+  is the last v1 state, including the v1 `ARCHITECTURE.md`, API and schema documents.
+- **Data:** the complete Study 1 database export lives in `data_folder_private/export_2026-08-30/`
+  (git-ignored; users, messages, both survey sets, dashboard stats as CSV and JSON). The production
+  database was then wiped and recreated with the v2 schema; no v1 table exists in it.
+- **Notes:** the ~50 incident/fix/deployment logs that used to sit in the repository root and
+  `backend/` are in [`docs/archive/study1/`](./archive/study1/README.md). They describe v1 only and
+  quoted credentials at the time they were written; treat every value in them (and in git history) as
+  compromised and never reuse one.

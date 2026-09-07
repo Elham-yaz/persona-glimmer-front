@@ -1,4 +1,4 @@
-import { Pool, PoolConfig } from 'pg';
+import { Pool, PoolClient, PoolConfig } from 'pg';
 import dotenv from 'dotenv';
 
 dotenv.config();
@@ -26,29 +26,32 @@ const poolConfig: PoolConfig = {
 
 const pool = new Pool(poolConfig);
 
-// Test connection
+let announcedConnection = false;
 pool.on('connect', () => {
-  console.log('Connected to PostgreSQL database');
+  if (!announcedConnection && process.env.NODE_ENV !== 'test') {
+    announcedConnection = true;
+    console.log('Connected to PostgreSQL database');
+  }
 });
 
 pool.on('error', (err) => {
-  console.error('✗ Unexpected error on idle client', err);
   // Don't exit process - let the app handle errors gracefully
-  console.error('Database pool error:', err.message);
+  console.error('Unexpected error on idle PostgreSQL client:', err.message);
 });
 
+/**
+ * Run a parameterized query on the shared pool.
+ */
 export const query = async (text: string, params?: any[]) => {
   const start = Date.now();
   try {
     const res = await pool.query(text, params);
-    const duration = Date.now() - start;
-    // Only log query details in development
     if (process.env.NODE_ENV === 'development') {
+      const duration = Date.now() - start;
       console.log('Executed query', { text: text.substring(0, 100), duration, rows: res.rowCount });
     }
     return res;
   } catch (error: any) {
-    // Log query errors (sanitize in production)
     if (process.env.NODE_ENV === 'development') {
       console.error('Database query error', { text: text.substring(0, 100), error: error.message });
     } else {
@@ -58,32 +61,36 @@ export const query = async (text: string, params?: any[]) => {
   }
 };
 
-export const getClient = async () => {
+/**
+ * Run `fn` inside a single transaction on a dedicated client.
+ * COMMIT on success, ROLLBACK on any thrown error (which is re-thrown).
+ */
+export async function withTransaction<T>(fn: (client: PoolClient) => Promise<T>): Promise<T> {
   const client = await pool.connect();
-  const originalQuery = client.query.bind(client);
-  const release = client.release.bind(client);
-  
-  // Set a timeout of 5 seconds, after which we will log this client's last query
-  const timeout = setTimeout(() => {
-    console.error('A client has been checked out for more than 5 seconds!');
-  }, 5000);
-  
-  // Monkey patch the query method to log the last query
-  // Create a wrapper that preserves all overloads by using type assertion
-  const patchedQuery: typeof client.query = ((...args: any[]) => {
-    clearTimeout(timeout);
-    // Call original query with all arguments - use any to bypass type checking for overloads
-    return (originalQuery as any)(...args);
-  }) as typeof client.query;
-  
-  client.query = patchedQuery;
-  
-  client.release = () => {
-    clearTimeout(timeout);
-    return release();
-  };
-  
-  return client;
-};
+  try {
+    await client.query('BEGIN');
+    const result = await fn(client);
+    await client.query('COMMIT');
+    return result;
+  } catch (error) {
+    try {
+      await client.query('ROLLBACK');
+    } catch (rollbackError: any) {
+      console.error('Transaction rollback failed:', rollbackError.message);
+    }
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Close the pool (CLI scripts and tests). Safe to call more than once.
+ */
+export async function closePool(): Promise<void> {
+  if (!pool.ended) {
+    await pool.end();
+  }
+}
 
 export default pool;

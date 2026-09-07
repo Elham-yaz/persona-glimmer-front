@@ -1,168 +1,98 @@
-# Research Chat Platform - Backend API
+# Backend — Study 2 (single anonymous session)
 
-Backend API for the research-focused chat platform.
+Express + PostgreSQL API for the research chat platform, v2. One anonymous session per participant:
+random assignment to one of 4 agent conditions x 3 contexts, 10 interactions, a 16-item post-chat
+survey, and a unique 5-digit completion code. The authoritative contract is
+[`docs/STUDY2_API.md`](../docs/STUDY2_API.md); the plan is [`docs/STUDY2_PLAN.md`](../docs/STUDY2_PLAN.md).
 
-## Setup
-
-### 1. Install Dependencies
+## Quick start
 
 ```bash
+cd backend
 npm install
+cp env.example .env            # then edit DATABASE_URL, OPENAI_API_KEY (or MOCK_OPENAI=true), ADMIN_API_KEY
+npm run migrate                # tracked migrations (schema_migrations), idempotent
+npm run seed                   # agent conditions, contexts, survey questions, guardrails (upserts)
+npm run dev                    # tsx watch src/server.ts (default port 3000)
 ```
 
-### 2. Environment Variables
-
-Copy `env.example` to `.env` and fill in your values:
-
-```bash
-cp env.example .env
-```
-
-Required variables:
-- `DATABASE_URL` - PostgreSQL connection string
-- `OPENAI_API_KEY` - Your OpenAI API key
-- `JWT_SECRET` - Secret key for JWT tokens
-- `FRONTEND_URL` - Frontend URL for CORS
-- `PORT` - Server port (default: 3000)
-- `NODE_ENV` - Environment (development/production)
-
-### 3. Database Setup
-
-#### Create Database
-
-```sql
-CREATE DATABASE research_chat_platform;
-```
-
-#### Run Migrations
-
-```bash
-npm run migrate
-```
-
-#### Seed Data
-
-```bash
-npm run seed
-```
-
-**Note:** The seed files include placeholder data for topics. Replace the content in `src/seeds/topics.seed.ts` with your actual research topic data.
-
-### 4. Start Development Server
-
-```bash
-npm run dev
-```
-
-The server will start on `http://localhost:3000`
+Required environment variables: `DATABASE_URL`, `ADMIN_API_KEY`, and `OPENAI_API_KEY` unless
+`MOCK_OPENAI=true`. `JWT_SECRET` is no longer used. See `env.example` for the full list
+(`ASSIGNMENT_MODE`, `ALLOW_FORCED_ASSIGNMENT`, `OPENAI_MODEL`, `FRONTEND_URL`, `PORT`, TLS options).
 
 ## Scripts
 
-- `npm run dev` - Start development server with hot reload
-- `npm run build` - Build for production
-- `npm start` - Start production server
-- `npm run migrate` - Run database migrations
-- `npm run seed` - Seed database with initial data
-- `npm run lint` - Run ESLint
+| Script | What it does |
+|---|---|
+| `npm run dev` | Start with `tsx watch` |
+| `npm run build` / `npm start` | Compile to `dist/` and run `node dist/server.js` |
+| `npm run migrate` | Apply `src/migrations/NNN_*.sql` not yet recorded in `schema_migrations`, each in one transaction |
+| `npm run seed` | Idempotent upserts of all reference data |
+| `npm run db:reset` | Drop and recreate schema `public`. Refuses unless `CONFIRM_RESET=<database name from DATABASE_URL>` |
+| `npm test` / `npm run test:watch` | Vitest + supertest integration tests (see below) |
+| `npm run lint` | ESLint |
 
-## API Endpoints
+Typical fresh database:
 
-See [API Documentation](../docs/API_DOCUMENTATION.md) for complete API reference.
-
-### Health Check
-
-```
-GET /health
-```
-
-### Authentication
-
-- `POST /api/auth/register` - Register new user
-- `POST /api/auth/login` - Login user
-
-### User
-
-- `GET /api/user/state` - Get current user state
-
-### Topics
-
-- `GET /api/topics` - Get all topics
-- `GET /api/topics/current` - Get current topic
-- `GET /api/topics/:id` - Get topic by ID
-
-### Chat
-
-- `POST /api/chat/message` - Send message
-- `GET /api/chat/messages/:topicId` - Get chat history
-- `GET /api/chat/status/:topicId` - Get chat status
-
-### Surveys
-
-- `POST /api/surveys/literacy` - Submit AI literacy survey
-- `POST /api/surveys/post-topic` - Submit post-topic survey
-- `GET /api/surveys/literacy/status` - Check literacy survey status
-
-## Project Structure
-
-```
-backend/
-├── src/
-│   ├── config/          # Database and OpenAI configuration
-│   ├── controllers/     # Request handlers
-│   ├── middleware/      # Auth, validation, error handling
-│   ├── models/          # Database models
-│   ├── routes/          # API routes
-│   ├── services/        # Business logic (OpenAI, agents)
-│   ├── utils/           # Utility functions
-│   ├── migrations/      # Database migrations
-│   ├── seeds/           # Database seed data
-│   └── app.ts           # Express app setup
-├── dist/                # Compiled JavaScript (generated)
-└── package.json
+```bash
+DATABASE_URL=postgresql://localhost:5432/persona_glimmer_dev CONFIRM_RESET=persona_glimmer_dev npm run db:reset
+DATABASE_URL=postgresql://localhost:5432/persona_glimmer_dev npm run migrate
+DATABASE_URL=postgresql://localhost:5432/persona_glimmer_dev npm run seed
 ```
 
-## Database Schema
+## API
 
-See [Database Schema Documentation](../docs/DATABASE_SCHEMA.md) for complete schema details.
+Envelope everywhere: `{ success: true, data }` or `{ success: false, error: { message, code } }`.
 
-## Deployment
+Participant (`Authorization: Bearer <sessionId>` for `/me/*`; unknown -> `401 SESSION_INVALID`):
 
-### Render
+| Endpoint | Notes |
+|---|---|
+| `POST /api/sessions` | Create a session (`{ externalId?, force? }`); 20/hour/IP. `force` honored only with `ALLOW_FORCED_ASSIGNMENT=true` |
+| `GET /api/sessions/me` | Resume: full state incl. transcript |
+| `POST /api/sessions/me/messages` | `{ clientMessageId, content }`; idempotent per id; 30/min/session; `409 SESSION_LOCKED` at 10; `502 AGENT_UNAVAILABLE` persists nothing |
+| `POST /api/sessions/me/survey` | 16 responses `post-1..post-16`, values 1-7; `409 SESSION_NOT_LOCKED` before 10 interactions; idempotent, returns the unique code |
 
-1. Connect your repository to Render
-2. Set environment variables in Render dashboard
-3. Set build command: `npm install && npm run build`
-4. Set start command: `npm start`
-5. Ensure PostgreSQL database is connected
+Admin (`x-admin-api-key`, read-only, 100 per 15 min): `GET /api/admin/verify`, `/dashboard`,
+`/sessions[/:id]`, `/messages`, `/surveys`, and `/export?type=sessions|messages|surveys`
+(streamed RFC-4180 CSV). Migrations and seeds run via CLI only.
 
-### Environment Variables for Production
+All v1 endpoints (`/api/auth`, `/api/user`, `/api/topics`, `/api/chat`, `/api/surveys`, `/api/guardrails`)
+are gone and return 404.
 
-Make sure to set all required environment variables in your deployment platform.
+## Layout
 
-## Development Notes
+```
+src/
+  app.ts                 express app (exported, does not listen)   server.ts   listens + graceful shutdown
+  config/                database.ts (pool, withTransaction), openai.ts (lazy client), study.ts (constants/env switches)
+  middleware/            session.middleware.ts (Bearer session), validation, error handler
+  controllers/routes/    session.*, admin.*
+  models/                AgentCondition, Context, Session, SessionMessage, SessionSurveyResponse, SurveyQuestion, GlobalGuardrail
+  services/              assignment (random | balanced), agent (prompt assembly), openai (MOCK_OPENAI support)
+  migrations/            001-008 *.sql, run-migrations.ts, reset-database.ts
+  seeds/                 agent_conditions, contexts (hotel context is a marked PLACEHOLDER), survey_questions, guardrails
+  utils/                 errors, sanitize, completionCode
+tests/                   vitest + supertest integration tests
+```
 
-- All timestamps use UTC
-- JWT tokens expire after 7 days
-- Chat endpoints are rate-limited to 30 requests/minute
-- OpenAI API uses `gpt-4-turbo-preview` model by default
-- Database connection pooling is configured for 20 max connections
+## Tests
 
-## Troubleshooting
+```bash
+npm test
+```
 
-### Database Connection Issues
+Tests run against `DATABASE_URL` if set, otherwise `postgresql://localhost:5432/persona_glimmer_test`,
+and **refuse to run unless the host is localhost / 127.0.0.1** — the global setup drops and
+recreates the `public` schema, then migrates and seeds. `MOCK_OPENAI=true` and
+`DISABLE_RATE_LIMITS=true` are forced; no network access is needed.
 
-- Verify `DATABASE_URL` is correct
-- Check PostgreSQL is running
-- Verify network access if using remote database
+## Deployment notes
 
-### OpenAI API Errors
-
-- Verify `OPENAI_API_KEY` is set correctly
-- Check API key has sufficient credits
-- Monitor rate limits
-
-### Migration Errors
-
-- Ensure database exists
-- Check user has CREATE TABLE permissions
-- Run migrations in order
+- `npm start` runs `node dist/server.js` (the `main` entry). Run `npm run migrate && npm run seed`
+  from the service shell after deploying a fresh database.
+- Production requires TLS to the database by default (`DATABASE_CA_CERT` / `DATABASE_SSL_NO_VERIFY`
+  as escape hatches, unchanged from v1).
+- The other Markdown files in this directory (`CURRENT_STATUS.md`, `DEBUG_LOGIN.md`, `SETUP_GUIDE.md`,
+  `QUICK_START.md`, `ENV_SETUP_CHECKLIST.md`, `ENV_CONFIGURATION.txt`) describe the **v1** login-based
+  platform and are kept only as history.

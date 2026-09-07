@@ -1,35 +1,19 @@
-import { Message } from '@/types';
-import { ThumbsUp, ThumbsDown, User, Bot } from 'lucide-react';
+import { ChatMessage } from '@/types';
+import { User, Bot } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
-function formatTimestamp(timestamp: Date): string {
+function formatTimestamp(iso: string): string {
+  const messageTime = new Date(iso);
+  if (Number.isNaN(messageTime.getTime())) return '';
   const now = new Date();
-  const messageTime = new Date(timestamp);
   const diffInSeconds = Math.floor((now.getTime() - messageTime.getTime()) / 1000);
 
-  // Less than 1 minute ago
-  if (diffInSeconds < 60) {
-    return 'just now';
-  }
-
-  // Less than 1 hour ago
-  if (diffInSeconds < 3600) {
-    const minutes = Math.floor(diffInSeconds / 60);
-    return `${minutes}m ago`;
-  }
-
-  // Less than 24 hours ago
-  if (diffInSeconds < 86400) {
-    const hours = Math.floor(diffInSeconds / 3600);
-    return `${hours}h ago`;
-  }
-
-  // Same day
+  if (diffInSeconds < 60) return 'just now';
+  if (diffInSeconds < 3600) return `${Math.floor(diffInSeconds / 60)}m ago`;
+  if (diffInSeconds < 86400) return `${Math.floor(diffInSeconds / 3600)}h ago`;
   if (messageTime.toDateString() === now.toDateString()) {
     return messageTime.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
   }
-
-  // Different day - show date and time
   return messageTime.toLocaleString('en-US', {
     month: 'short',
     day: 'numeric',
@@ -39,20 +23,23 @@ function formatTimestamp(timestamp: Date): string {
 }
 
 interface MessageBubbleProps {
-  message: Message;
-  onFeedback?: (messageId: string, feedback: 'positive' | 'negative') => void;
+  message: ChatMessage;
   agentName?: string;
+  /** Optimistic message awaiting the server's confirmation. */
+  pending?: boolean;
 }
 
-export function MessageBubble({ message, onFeedback, agentName = 'Agent' }: MessageBubbleProps) {
+export function MessageBubble({ message, agentName = 'Agent', pending = false }: MessageBubbleProps) {
   const isUser = message.role === 'user';
 
   return (
     <div
       className={cn(
         'flex gap-3 max-w-[85%]',
-        isUser ? 'ml-auto flex-row-reverse animate-slide-in-right' : 'mr-auto animate-slide-in-left'
+        isUser ? 'ml-auto flex-row-reverse animate-slide-in-right' : 'mr-auto animate-slide-in-left',
+        pending && 'opacity-70'
       )}
+      data-testid={`message-${message.role}`}
     >
       {/* Avatar */}
       <div
@@ -60,6 +47,7 @@ export function MessageBubble({ message, onFeedback, agentName = 'Agent' }: Mess
           'flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center',
           isUser ? 'bg-primary' : 'bg-secondary'
         )}
+        aria-hidden="true"
       >
         {isUser ? (
           <User className="w-4 h-4 text-primary-foreground" />
@@ -68,51 +56,19 @@ export function MessageBubble({ message, onFeedback, agentName = 'Agent' }: Mess
         )}
       </div>
 
-      <div className="space-y-1">
+      <div className="space-y-1 min-w-0">
         {/* Sender name and timestamp */}
         <div className={cn('flex items-center gap-2', isUser && 'flex-row-reverse')}>
-          <p className={cn('text-xs text-muted-foreground')}>
-            {isUser ? 'You' : agentName}
-          </p>
-          <span className={cn('text-xs text-muted-foreground/70')}>
-            {formatTimestamp(message.timestamp)}
+          <p className="text-xs text-muted-foreground">{isUser ? 'You' : agentName}</p>
+          <span className="text-xs text-muted-foreground/70">
+            {pending ? 'sending…' : formatTimestamp(message.createdAt)}
           </span>
         </div>
 
         {/* Message bubble */}
         <div className={cn(isUser ? 'chat-bubble-user' : 'chat-bubble-agent')}>
-          <p className="text-sm leading-relaxed whitespace-pre-wrap">{message.content}</p>
+          <p className="text-sm leading-relaxed whitespace-pre-wrap break-words">{message.content}</p>
         </div>
-
-        {/* Feedback buttons for agent messages */}
-        {!isUser && onFeedback && (
-          <div className="flex items-center gap-1 pt-1">
-            <button
-              onClick={() => onFeedback(message.id, 'positive')}
-              className={cn(
-                'p-1.5 rounded-md transition-colors',
-                message.feedback === 'positive'
-                  ? 'bg-accent/20 text-accent'
-                  : 'hover:bg-secondary text-muted-foreground hover:text-foreground'
-              )}
-              aria-label="Helpful"
-            >
-              <ThumbsUp className="w-3.5 h-3.5" />
-            </button>
-            <button
-              onClick={() => onFeedback(message.id, 'negative')}
-              className={cn(
-                'p-1.5 rounded-md transition-colors',
-                message.feedback === 'negative'
-                  ? 'bg-destructive/20 text-destructive'
-                  : 'hover:bg-secondary text-muted-foreground hover:text-foreground'
-              )}
-              aria-label="Not helpful"
-            >
-              <ThumbsDown className="w-3.5 h-3.5" />
-            </button>
-          </div>
-        )}
       </div>
     </div>
   );

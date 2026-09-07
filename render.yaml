@@ -16,9 +16,16 @@ services:
         value: production
       - key: PORT
         value: 3000
-      # Add these in Render dashboard after creating service:
-      # DATABASE_URL - Your Render PostgreSQL connection string
-      # OPENAI_API_KEY - Your OpenAI API key
-      # JWT_SECRET - Your JWT secret
-      # FRONTEND_URL - Your Netlify site URL
-      # ADMIN_API_KEY - Optional admin API key
+      - key: ASSIGNMENT_MODE
+        value: random            # random | balanced (docs/STUDY2_API.md §0)
+      - key: ALLOW_FORCED_ASSIGNMENT
+        value: "false"           # never true in production
+      - key: OPENAI_MODEL
+        value: gpt-4o-mini
+      # Set these as secrets in the Render dashboard after creating the service:
+      # DATABASE_URL   - Render PostgreSQL connection string (Internal URL, ?sslmode=require)
+      # OPENAI_API_KEY - OpenAI API key
+      # ADMIN_API_KEY  - strong random string; the admin API is disabled if unset
+      # FRONTEND_URL   - the Netlify site URL, no trailing slash (exact-match CORS)
+      # Optional: DATABASE_CA_CERT / DATABASE_SSL_NO_VERIFY (TLS escape hatches)
+      # Note: JWT_SECRET is no longer used (Study 2 has no user accounts).

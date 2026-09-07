@@ -1,84 +1,148 @@
 import { retry } from '@/utils/retry';
+import type {
+  AdminDashboardData,
+  AdminExportType,
+  AdminMessage,
+  AdminMessagesQuery,
+  AdminSession,
+  AdminSessionDetail,
+  AdminSessionsQuery,
+  AdminSurveyResponse,
+  AdminSurveysQuery,
+  CreateSessionRequest,
+  SendMessageRequest,
+  SendMessageResult,
+  SessionState,
+  SurveyResponse,
+  SurveySubmitResult,
+} from '@/types';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
+// Study 2 API client — implements docs/STUDY2_API.md.
+//
+// Participant calls authenticate with the anonymous session id
+// (`Authorization: Bearer <sessionId>`), admin calls with `x-admin-api-key`.
+// There is no JWT / login anywhere in v2.
 
-// Health check function to verify backend is available
-async function checkBackendHealth(timeoutMs: number = 10000): Promise<boolean> {
+export const API_BASE_URL: string = import.meta.env.VITE_API_URL || 'http://localhost:3000';
+
+// ---------------------------------------------------------------------------
+// Errors
+// ---------------------------------------------------------------------------
+
+/**
+ * Error codes the UI can branch on. Backend codes (docs/STUDY2_API.md) are
+ * passed through verbatim; the remaining ones are synthesised client-side.
+ */
+export type ApiErrorCode =
+  // backend codes
+  | 'SESSION_INVALID'
+  | 'SESSION_LOCKED'
+  | 'SESSION_COMPLETED'
+  | 'SESSION_NOT_LOCKED'
+  | 'AGENT_UNAVAILABLE'
+  | 'VALIDATION_ERROR'
+  // client-side codes
+  | 'ADMIN_UNAUTHORIZED'
+  | 'RATE_LIMITED'
+  | 'NETWORK_ERROR'
+  | 'TIMEOUT'
+  | 'SERVICE_UNAVAILABLE'
+  | 'NOT_FOUND'
+  | 'SERVER_ERROR'
+  | 'HTTP_ERROR'
+  | 'UNKNOWN';
+
+export class ApiError extends Error {
+  readonly code: ApiErrorCode | string;
+  readonly status: number;
+
+  constructor(message: string, code: ApiErrorCode | string, status = 0) {
+    super(message);
+    this.name = 'ApiError';
+    this.code = code;
+    this.status = status;
+  }
+}
+
+export function isApiError(error: unknown): error is ApiError {
+  return error instanceof ApiError;
+}
+
+export function hasErrorCode(error: unknown, code: ApiErrorCode): boolean {
+  return isApiError(error) && error.code === code;
+}
+
+export function getErrorMessage(error: unknown, fallback = 'Something went wrong. Please try again.'): string {
+  if (error instanceof Error && error.message) return error.message;
+  return fallback;
+}
+
+// ---------------------------------------------------------------------------
+// Storage helpers
+// ---------------------------------------------------------------------------
+
+function storage(kind: 'local' | 'session'): Storage | null {
   try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-    
-    const response = await fetch(`${API_BASE_URL}/health`, {
-      method: 'GET',
-      signal: controller.signal,
-      headers: {
-        'Content-Type': 'application/json',
-      },
-    });
-    
-    clearTimeout(timeoutId);
-    return response.ok;
-  } catch (error: any) {
-    // Network error, timeout, or CORS - backend is not available
-    return false;
+    return kind === 'local' ? window.localStorage : window.sessionStorage;
+  } catch {
+    return null; // storage disabled (private mode, blocked cookies, ...)
   }
 }
 
-// Wait for backend to be available (for Render cold starts)
-async function waitForBackend(maxWaitMs: number = 30000, checkIntervalMs: number = 2000): Promise<boolean> {
-  const startTime = Date.now();
-  
-  while (Date.now() - startTime < maxWaitMs) {
-    if (await checkBackendHealth(5000)) {
-      return true;
-    }
-    // Wait before checking again
-    await new Promise(resolve => setTimeout(resolve, checkIntervalMs));
+/** localStorage key holding the participant's anonymous session id. */
+export const SESSION_STORAGE_KEY = 'study_session_id';
+
+export const getSessionId = (): string | null => {
+  try {
+    return storage('local')?.getItem(SESSION_STORAGE_KEY) ?? null;
+  } catch {
+    return null;
   }
-  
-  return false;
-}
-
-export interface ApiResponse<T> {
-  success: boolean;
-  data: T;
-  error?: {
-    message: string;
-    code: string;
-  };
-}
-
-// Token management
-const TOKEN_KEY = 'auth_token';
-
-export const getToken = (): string | null => {
-  return localStorage.getItem(TOKEN_KEY);
 };
 
-export const setToken = (token: string): void => {
-  localStorage.setItem(TOKEN_KEY, token);
+export const setSessionId = (sessionId: string): void => {
+  try {
+    storage('local')?.setItem(SESSION_STORAGE_KEY, sessionId);
+  } catch {
+    // ignore — the session still works for this page load
+  }
 };
 
-export const removeToken = (): void => {
-  localStorage.removeItem(TOKEN_KEY);
+export const clearSessionId = (): void => {
+  try {
+    storage('local')?.removeItem(SESSION_STORAGE_KEY);
+  } catch {
+    // ignore
+  }
 };
 
-// Admin API key management.
-// The key is entered by the researcher on the admin dashboard and verified against
-// the backend before being stored for the browser session — it is never shipped in
-// the bundle. sessionStorage means it is cleared when the tab closes.
+// Admin API key: entered by the researcher on the dashboard and verified
+// against the backend before being stored for the browser session — never
+// shipped in the bundle. sessionStorage is cleared when the tab closes.
 const ADMIN_KEY_STORAGE = 'admin_api_key';
 
 export const getAdminKey = (): string | null => {
-  return sessionStorage.getItem(ADMIN_KEY_STORAGE);
+  try {
+    return storage('session')?.getItem(ADMIN_KEY_STORAGE) ?? null;
+  } catch {
+    return null;
+  }
 };
 
 export const setAdminKey = (key: string): void => {
-  sessionStorage.setItem(ADMIN_KEY_STORAGE, key);
+  try {
+    storage('session')?.setItem(ADMIN_KEY_STORAGE, key);
+  } catch {
+    // ignore
+  }
 };
 
 export const clearAdminKey = (): void => {
-  sessionStorage.removeItem(ADMIN_KEY_STORAGE);
+  try {
+    storage('session')?.removeItem(ADMIN_KEY_STORAGE);
+  } catch {
+    // ignore
+  }
 };
 
 const adminHeaders = (): Record<string, string> => {
@@ -86,602 +150,450 @@ const adminHeaders = (): Record<string, string> => {
   return key ? { 'x-admin-api-key': key } : {};
 };
 
-// API request helper
-async function apiRequest<T>(
-  endpoint: string,
-  options: RequestInit = {},
-  skipHealthCheck: boolean = false
-): Promise<ApiResponse<T>> {
-  const token = getToken();
-  
-  const headers: HeadersInit = {
-    'Content-Type': 'application/json',
-    ...options.headers,
-  };
-
-  if (token) {
-    headers['Authorization'] = `Bearer ${token}`;
+/** Idempotency key for a participant message (docs/STUDY2_API.md §1). */
+export function createClientMessageId(): string {
+  const c = typeof globalThis.crypto !== 'undefined' ? globalThis.crypto : undefined;
+  if (c && typeof c.randomUUID === 'function') {
+    return c.randomUUID();
   }
+  // Fallback for environments without randomUUID (older browsers / jsdom).
+  const bytes = new Uint8Array(16);
+  if (c && typeof c.getRandomValues === 'function') {
+    c.getRandomValues(bytes);
+  } else {
+    for (let i = 0; i < bytes.length; i++) bytes[i] = Math.floor(Math.random() * 256);
+  }
+  const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
 
+// ---------------------------------------------------------------------------
+// Backend health (Render free-tier cold starts)
+// ---------------------------------------------------------------------------
+
+async function checkBackendHealth(timeoutMs = 10000): Promise<boolean> {
   try {
-    // For auth and admin endpoints, check backend health first (unless explicitly skipped)
-    // Skip health check for the health endpoint itself to avoid infinite loop
-    if (!skipHealthCheck && (endpoint.includes('/auth/') || endpoint.includes('/admin/')) && endpoint !== '/health') {
-      const isHealthy = await checkBackendHealth(5000);
-      if (!isHealthy) {
-        // Backend might be waking up, wait a bit longer
-        const backendAvailable = await waitForBackend(30000, 2000);
-        if (!backendAvailable) {
-          throw new Error(
-            'Backend service is temporarily unavailable. This may be due to the service waking up. Please try again in a few moments.'
-          );
-        }
-      }
-    }
-
-    const url = `${API_BASE_URL}${endpoint}`;
-    // Only log in development, and don't log sensitive endpoints
-    if (import.meta.env.DEV && !endpoint.includes('/auth/')) {
-      console.log('API Request:', endpoint, options.method || 'GET');
-    }
-    
-    // Use retry for network errors and server errors (502, 503, 504)
-    let response: Response;
-    try {
-      response = await retry(
-        async () => {
-          const controller = new AbortController();
-          const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
-          
-          try {
-            const res = await fetch(url, {
-              ...options,
-              headers,
-              signal: controller.signal,
-            });
-            clearTimeout(timeoutId);
-            
-            // Retry on 502, 503, 504 (service unavailable, gateway errors)
-            if (res.status === 502 || res.status === 503 || res.status === 504) {
-              throw new Error(`Server error ${res.status}: Service may be starting up`);
-            }
-            
-            return res;
-          } catch (fetchError: any) {
-            clearTimeout(timeoutId);
-            throw fetchError;
-          }
-        },
-        {
-          maxRetries: 5, // More retries for cold starts
-          delay: 2000, // Start with 2 second delay
-          backoff: true,
-          retryable: (error: any) => {
-            // Retry on network errors, timeouts, and server errors
-            if (error.name === 'TypeError' && error.message.includes('fetch')) {
-              return true;
-            }
-            if (error.name === 'AbortError') {
-              return true; // Timeout
-            }
-            if (error.message?.includes('502') || error.message?.includes('503') || error.message?.includes('504')) {
-              return true;
-            }
-            // CORS errors might indicate backend is down
-            if (error.message?.includes('CORS') || error.message?.includes('Failed to fetch')) {
-              return true;
-            }
-            return false;
-          },
-        }
-      );
-    } catch (error: any) {
-      // If retry failed, provide helpful error message
-      if (error.name === 'TypeError' && (error.message.includes('fetch') || error.message.includes('Failed to fetch'))) {
-        throw new Error(
-          'Unable to connect to the server. The backend service may be starting up. Please wait a moment and try again.'
-        );
-      }
-      if (error.name === 'AbortError') {
-        throw new Error(
-          'Request timed out. The backend service may be taking longer than usual to respond. Please try again.'
-        );
-      }
-      if (error.message?.includes('502') || error.message?.includes('503') || error.message?.includes('504')) {
-        throw new Error(
-          'Backend service is temporarily unavailable. It may be starting up. Please wait a moment and try again.'
-        );
-      }
-      throw error;
-    }
-
-    // Check if response is ok before trying to parse JSON
-    if (!response.ok) {
-      // Handle 401 Unauthorized (token expired/invalid)
-      if (response.status === 401) {
-        // Admin endpoints authenticate with the admin key, not the participant JWT —
-        // a 401 there means the key was rejected, so don't touch the participant session
-        if (endpoint.includes('/admin/')) {
-          clearAdminKey();
-          throw new Error('Invalid admin key. Please enter the admin API key again.');
-        }
-        removeToken();
-        // Dispatch custom event for auth failure
-        window.dispatchEvent(new CustomEvent('auth-failed'));
-        throw new Error('Your session has expired. Please login again to continue.');
-      }
-
-      // Handle 429 Too Many Requests (rate limiting)
-      if (response.status === 429) {
-        const retryAfter = response.headers.get('Retry-After');
-        const message = retryAfter
-          ? `Too many requests. Please wait ${retryAfter} seconds before trying again.`
-          : 'Too many requests. Please wait a moment before trying again.';
-        throw new Error(message);
-      }
-
-      // Handle 400 Bad Request
-      if (response.status === 400) {
-        let errorMessage = 'Invalid request. Please check your input and try again.';
-        try {
-          const errorData = await response.json();
-          errorMessage = errorData.error?.message || errorMessage;
-        } catch {
-          // Use default message
-        }
-        throw new Error(errorMessage);
-      }
-
-      // Handle 404 Not Found
-      if (response.status === 404) {
-        throw new Error('The requested resource was not found.');
-      }
-
-      // Handle 500 Internal Server Error
-      if (response.status >= 500) {
-        throw new Error('Server error. Please try again in a moment. If the problem persists, contact support.');
-      }
-
-      // Generic error handling
-      let errorMessage = `An error occurred (${response.status}). Please try again.`;
-      try {
-        const errorData = await response.json();
-        errorMessage = errorData.error?.message || errorMessage;
-      } catch {
-        // Use default message
-      }
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    return data;
-  } catch (error: any) {
-    // Re-throw errors that were already handled above
-    throw error;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+    const response = await fetch(`${API_BASE_URL}/health`, {
+      method: 'GET',
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+    return response.ok;
+  } catch {
+    return false;
   }
 }
 
-// Export health check for use in components
+async function waitForBackend(maxWaitMs = 30000, checkIntervalMs = 2000): Promise<boolean> {
+  const startTime = Date.now();
+  while (Date.now() - startTime < maxWaitMs) {
+    if (await checkBackendHealth(5000)) {
+      return true;
+    }
+    await new Promise((resolve) => setTimeout(resolve, checkIntervalMs));
+  }
+  return false;
+}
+
 export const healthCheck = checkBackendHealth;
 export const waitForBackendReady = waitForBackend;
 
-// Auth API
-export const authApi = {
-  register: async (email: string, password: string) => {
-    const response = await apiRequest<{
-      user: {
-        id: string;
-        email: string;
-        assignedAgentId: number;
-        currentTopicIndex: number;
-        hasCompletedLiteracySurvey: boolean;
-      };
-      agent: {
-        id: number;
-        name: string;
-        emotionalIntelligence: 'low' | 'medium' | 'high';
-        cognitiveIntelligence: 'low' | 'medium' | 'high';
-      };
-      token: string;
-    }>('/api/auth/register', {
-      method: 'POST',
-      body: JSON.stringify({ email, password }),
-    });
+// ---------------------------------------------------------------------------
+// Core request helper
+// ---------------------------------------------------------------------------
 
-    if (response.data.token) {
-      setToken(response.data.token);
+interface ApiEnvelopeOk<T> {
+  success: true;
+  data: T;
+}
+
+interface ApiEnvelopeErr {
+  success: false;
+  error?: { message?: string; code?: string };
+}
+
+type ApiEnvelope<T> = ApiEnvelopeOk<T> | ApiEnvelopeErr;
+
+interface RequestOptions {
+  method?: 'GET' | 'POST';
+  body?: unknown;
+  headers?: Record<string, string>;
+  /** Which credential to attach. */
+  auth?: 'session' | 'admin' | 'none';
+  /** Poll /health first so a Render cold start doesn't surface as a failure. */
+  coldStartWait?: boolean;
+  /** Per-attempt timeout. */
+  timeoutMs?: number;
+  /**
+   * Whether a per-attempt timeout (AbortError) is retried automatically.
+   * Defaults to true. Message sends turn this off: a hung transport is the one
+   * case where more long attempts are least likely to help, and the idempotent
+   * clientMessageId makes the participant's manual "Try again" safe.
+   */
+  retryOnTimeout?: boolean;
+}
+
+/** Thrown inside the retry loop for gateway errors that carry no API envelope. */
+class GatewayError extends Error {
+  readonly status: number;
+  constructor(status: number) {
+    super(`Server error ${status}: Service may be starting up`);
+    this.name = 'GatewayError';
+    this.status = status;
+  }
+}
+
+async function readEnvelopeError(response: Response): Promise<{ message?: string; code?: string } | null> {
+  let text = '';
+  try {
+    text = await response.text();
+  } catch {
+    return null;
+  }
+  if (!text) return null;
+  try {
+    const parsed: unknown = JSON.parse(text);
+    if (parsed && typeof parsed === 'object' && 'error' in parsed) {
+      const err = (parsed as ApiEnvelopeErr).error;
+      if (err && typeof err === 'object') {
+        return { message: err.message, code: err.code };
+      }
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === 'AbortError';
+}
+
+function isRetryableTransportError(error: unknown): boolean {
+  if (error instanceof ApiError) return false;
+  if (error instanceof GatewayError) return true;
+  if (error instanceof Error) {
+    if (isAbortError(error)) return true;
+    if (error.name === 'TypeError' && /fetch/i.test(error.message)) return true;
+    if (/CORS|Failed to fetch|NetworkError|Load failed/i.test(error.message)) return true;
+  }
+  return false;
+}
+
+function codeForStatus(status: number): ApiErrorCode {
+  if (status === 400) return 'VALIDATION_ERROR';
+  if (status === 404) return 'NOT_FOUND';
+  if (status === 429) return 'RATE_LIMITED';
+  if (status >= 500) return 'SERVER_ERROR';
+  return 'HTTP_ERROR';
+}
+
+async function apiRequest<T>(endpoint: string, options: RequestOptions = {}): Promise<T> {
+  const {
+    method = 'GET',
+    body,
+    auth = 'none',
+    coldStartWait = false,
+    timeoutMs = 30000,
+    retryOnTimeout = true,
+  } = options;
+
+  const headers: Record<string, string> = { ...(options.headers ?? {}) };
+  if (body !== undefined) {
+    headers['Content-Type'] = 'application/json';
+  }
+
+  if (auth === 'session') {
+    const sessionId = getSessionId();
+    if (!sessionId) {
+      throw new ApiError('No study session found. Please start the study again.', 'SESSION_INVALID', 401);
+    }
+    headers['Authorization'] = `Bearer ${sessionId}`;
+  } else if (auth === 'admin') {
+    Object.assign(headers, adminHeaders());
+  }
+
+  if (coldStartWait) {
+    const healthy = await checkBackendHealth(5000);
+    if (!healthy) {
+      const available = await waitForBackend(30000, 2000);
+      if (!available) {
+        throw new ApiError(
+          'The service is temporarily unavailable. It may be starting up — please try again in a few moments.',
+          'SERVICE_UNAVAILABLE',
+          503
+        );
+      }
+    }
+  }
+
+  const url = `${API_BASE_URL}${endpoint}`;
+  if (import.meta.env.DEV && !import.meta.env.TEST) {
+    console.log('API Request:', method, endpoint);
+  }
+
+  let response: Response;
+  try {
+    response = await retry(
+      async () => {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+        try {
+          const res = await fetch(url, {
+            method,
+            headers,
+            body: body !== undefined ? JSON.stringify(body) : undefined,
+            signal: controller.signal,
+          });
+
+          if (res.status === 502 || res.status === 503 || res.status === 504) {
+            // A 502 carrying an API envelope (e.g. AGENT_UNAVAILABLE) is a real
+            // answer from the backend and must NOT be retried automatically —
+            // the participant retries manually. A bare gateway error (Render
+            // proxy, no JSON body) is a cold start and is retried.
+            const envelopeError = await readEnvelopeError(res);
+            if (envelopeError?.code) {
+              throw new ApiError(
+                envelopeError.message || 'The service is temporarily unavailable. Please try again.',
+                envelopeError.code,
+                res.status
+              );
+            }
+            throw new GatewayError(res.status);
+          }
+          return res;
+        } finally {
+          clearTimeout(timeoutId);
+        }
+      },
+      {
+        maxRetries: 5,
+        delay: 2000,
+        backoff: true,
+        retryable: (error) => (retryOnTimeout || !isAbortError(error)) && isRetryableTransportError(error),
+      }
+    );
+  } catch (error: unknown) {
+    if (error instanceof ApiError) throw error;
+    if (error instanceof GatewayError) {
+      throw new ApiError(
+        'The service is temporarily unavailable. It may be starting up — please wait a moment and try again.',
+        'SERVICE_UNAVAILABLE',
+        error.status
+      );
+    }
+    if (isAbortError(error)) {
+      throw new ApiError(
+        'The request timed out. The service may be taking longer than usual — please try again.',
+        'TIMEOUT'
+      );
+    }
+    if (isRetryableTransportError(error)) {
+      throw new ApiError(
+        'Unable to connect to the server. Please check your connection and try again.',
+        'NETWORK_ERROR'
+      );
+    }
+    throw new ApiError(getErrorMessage(error), 'UNKNOWN');
+  }
+
+  if (!response.ok) {
+    const envelopeError = await readEnvelopeError(response);
+
+    if (response.status === 401) {
+      if (auth === 'session') {
+        // The stored session id is unknown to the backend — forget it so the
+        // participant can start cleanly instead of being stuck.
+        clearSessionId();
+        throw new ApiError(
+          'Your study session could not be found. Please return to the study link and begin again.',
+          'SESSION_INVALID',
+          401
+        );
+      }
+      if (endpoint.startsWith('/api/admin')) {
+        if (auth === 'admin') clearAdminKey();
+        throw new ApiError('Invalid admin key. Please enter the admin API key again.', 'ADMIN_UNAUTHORIZED', 401);
+      }
+      throw new ApiError(envelopeError?.message || 'Unauthorized.', envelopeError?.code || 'HTTP_ERROR', 401);
     }
 
-    return response.data;
-  },
-
-  login: async (email: string, password: string) => {
-    const response = await apiRequest<{
-      user: {
-        id: string;
-        email: string;
-        assignedAgentId: number;
-        currentTopicIndex: number;
-        hasCompletedLiteracySurvey: boolean;
-      };
-      agent: {
-        id: number;
-        name: string;
-        emotionalIntelligence: 'low' | 'medium' | 'high';
-        cognitiveIntelligence: 'low' | 'medium' | 'high';
-      };
-      token: string;
-    }>('/api/auth/login', {
-      method: 'POST',
-      body: JSON.stringify({ email, password }),
-    });
-
-    if (response.data.token) {
-      setToken(response.data.token);
+    if (response.status === 429) {
+      const retryAfter = response.headers.get('Retry-After');
+      const message = retryAfter
+        ? `Too many requests. Please wait ${retryAfter} seconds before trying again.`
+        : 'Too many requests. Please wait a moment before trying again.';
+      throw new ApiError(message, 'RATE_LIMITED', 429);
     }
 
-    return response.data;
-  },
+    const code = envelopeError?.code || codeForStatus(response.status);
+    let message = envelopeError?.message;
+    if (!message) {
+      if (response.status === 404) message = 'The requested resource was not found.';
+      else if (response.status >= 500) message = 'Server error. Please try again in a moment.';
+      else message = `An error occurred (${response.status}). Please try again.`;
+    }
+    throw new ApiError(message, code, response.status);
+  }
 
-  logout: () => {
-    removeToken();
-  },
+  let json: ApiEnvelope<T>;
+  try {
+    json = (await response.json()) as ApiEnvelope<T>;
+  } catch {
+    throw new ApiError('The server returned an unexpected response.', 'UNKNOWN', response.status);
+  }
+  if (!json || json.success !== true) {
+    const err = (json as ApiEnvelopeErr | null)?.error;
+    throw new ApiError(err?.message || 'Request failed.', err?.code || 'UNKNOWN', response.status);
+  }
+  return json.data;
+}
 
-  requestPasswordReset: async (email: string) => {
-    const response = await apiRequest<{
-      message: string;
-      token?: string; // Only in development
-    }>('/api/auth/forgot-password', {
+function buildQuery(params: Record<string, string | number | undefined | null>): string {
+  const search = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value === undefined || value === null || value === '') continue;
+    search.append(key, String(value));
+  }
+  const qs = search.toString();
+  return qs ? `?${qs}` : '';
+}
+
+// ---------------------------------------------------------------------------
+// Participant session API (docs/STUDY2_API.md §1)
+// ---------------------------------------------------------------------------
+
+export const sessionApi = {
+  /** POST /api/sessions — creates the anonymous session and stores its id. */
+  create: async (request: CreateSessionRequest = {}): Promise<SessionState> => {
+    const payload: CreateSessionRequest = {};
+    if (request.externalId) payload.externalId = request.externalId.slice(0, 100);
+    if (request.force) payload.force = request.force;
+    const data = await apiRequest<SessionState>('/api/sessions', {
       method: 'POST',
-      body: JSON.stringify({ email }),
+      body: payload,
+      auth: 'none',
+      coldStartWait: true,
     });
-
-    return response.data;
+    setSessionId(data.sessionId);
+    return data;
   },
 
-  resetPassword: async (token: string, newPassword: string) => {
-    const response = await apiRequest<{
-      message: string;
-    }>('/api/auth/reset-password', {
-      method: 'POST',
-      body: JSON.stringify({ token, newPassword }),
-    });
-
-    return response.data;
-  },
-};
-
-// User API
-export const userApi = {
-  getState: async () => {
-    return apiRequest<{
-      user: {
-        id: string;
-        email: string;
-        assignedAgentId: number;
-        currentTopicIndex: number;
-        hasCompletedLiteracySurvey: boolean;
-      };
-      agent: {
-        id: number;
-        name: string;
-        emotionalIntelligence: 'low' | 'medium' | 'high';
-        cognitiveIntelligence: 'low' | 'medium' | 'high';
-      };
-      currentTopic: {
-        id: number;
-        title: string;
-        stimulusText: string;
-        order: number;
-      } | null;
-      interactionStatus: {
-        interactionCount: number;
-        isLocked: boolean;
-        surveyCompleted: boolean;
-      } | null;
-      progress: {
-        completedTopics: number;
-        totalTopics: number;
-        completionPercentage: number;
-        totalInteractions: number;
-      };
-    }>('/api/user/state');
-  },
-};
-
-// Topic API
-export const topicApi = {
-  getAll: async () => {
-    return apiRequest<{
-      topics: Array<{
-        id: number;
-        title: string;
-        stimulusText: string;
-        order: number;
-      }>;
-    }>('/api/topics');
-  },
-
-  getCurrent: async () => {
-    return apiRequest<{
-      topic: {
-        id: number;
-        title: string;
-        stimulusText: string;
-        order: number;
-      };
-      interactionCount: number;
-      isLocked: boolean;
-      surveyCompleted: boolean;
-    }>('/api/topics/current');
-  },
-
-  getById: async (id: number) => {
-    return apiRequest<{
-      topic: {
-        id: number;
-        title: string;
-        stimulusText: string;
-        order: number;
-      };
-    }>(`/api/topics/${id}`);
-  },
-
-  getWithStatus: async () => {
-    return apiRequest<{
-      topics: Array<{
-        id: number;
-        title: string;
-        stimulusText: string;
-        order: number;
-        status: 'completed' | 'current' | 'locked' | 'accessible';
-        interactionCount: number;
-      }>;
-    }>('/api/topics/with-status');
-  },
-};
-
-// Guardrails API
-export const guardrailApi = {
-  getGuardrails: async () => {
-    return apiRequest<{
-      guardrails: {
-        id: number;
-        title: string;
-        content: string;
-      } | null;
-    }>('/api/guardrails');
-  },
-};
-
-// Chat API
-export const chatApi = {
-  sendMessage: async (topicId: number, content: string) => {
-    return apiRequest<{
-      userMessage: {
-        id: string;
-        content: string;
-        role: 'user' | 'agent';
-        timestamp: string;
-      };
-      agentMessage: {
-        id: string;
-        content: string;
-        role: 'user' | 'agent';
-        timestamp: string;
-      };
-      interactionCount: number;
-      isLocked: boolean;
-      shouldShowSurvey: boolean;
-    }>('/api/chat/message', {
-      method: 'POST',
-      body: JSON.stringify({ topicId, content }),
+  /** GET /api/sessions/me — full state for resume. */
+  get: async (): Promise<SessionState> => {
+    return apiRequest<SessionState>('/api/sessions/me', {
+      auth: 'session',
+      coldStartWait: true,
     });
   },
 
-  getHistory: async (topicId: number) => {
-    return apiRequest<{
-      messages: Array<{
-        id: string;
-        content: string;
-        role: 'user' | 'agent';
-        timestamp: string;
-      }>;
-    }>(`/api/chat/messages/${topicId}`);
+  /**
+   * POST /api/sessions/me/messages — idempotent on clientMessageId.
+   *
+   * The backend gives OpenAI 30 s and answers AGENT_UNAVAILABLE (not retried)
+   * on failure, so a client-side timeout only fires when the transport itself
+   * is stuck. That single attempt is surfaced as TIMEOUT so the participant
+   * gets the inline "Try again" (same clientMessageId) instead of waiting
+   * through five more long attempts. Bare 502/503/504 cold-start responses are
+   * still retried with backoff.
+   */
+  sendMessage: async (request: SendMessageRequest): Promise<SendMessageResult> => {
+    return apiRequest<SendMessageResult>('/api/sessions/me/messages', {
+      method: 'POST',
+      body: { clientMessageId: request.clientMessageId, content: request.content },
+      auth: 'session',
+      timeoutMs: 45000, // server-side OpenAI timeout (30 s) plus margin
+      retryOnTimeout: false,
+    });
   },
 
-  getStatus: async (topicId: number) => {
-    return apiRequest<{
-      interactionCount: number;
-      isLocked: boolean;
-      surveyCompleted: boolean;
-      maxInteractions: number;
-    }>(`/api/chat/status/${topicId}`);
+  /** POST /api/sessions/me/survey — idempotent; returns the completion code. */
+  submitSurvey: async (responses: SurveyResponse[]): Promise<SurveySubmitResult> => {
+    return apiRequest<SurveySubmitResult>('/api/sessions/me/survey', {
+      method: 'POST',
+      body: { responses },
+      auth: 'session',
+    });
   },
 };
 
-// Admin API
+// ---------------------------------------------------------------------------
+// Admin API (docs/STUDY2_API.md §2)
+// ---------------------------------------------------------------------------
+
 export const adminApi = {
-  // Verify a candidate admin key against the backend (used by the admin login form
-  // before the key is stored)
-  verifyKey: async (key: string) => {
+  verifyKey: async (key: string): Promise<{ ok: boolean }> => {
     return apiRequest<{ ok: boolean }>('/api/admin/verify', {
+      auth: 'none',
       headers: { 'x-admin-api-key': key },
+      coldStartWait: true,
     });
   },
 
-  getDashboard: async () => {
-    return apiRequest<{
-      totalUsers: number;
-      totalMessages: number;
-      completedLiteracySurvey: number;
-      totalInteractions: number;
-      completedPostTopicSurveys: number;
-      agentDistribution: Array<{ agentId: number; userCount: number }>;
-    }>('/api/admin/dashboard', {
+  getDashboard: async (): Promise<AdminDashboardData> => {
+    return apiRequest<AdminDashboardData>('/api/admin/dashboard', {
+      auth: 'admin',
+      coldStartWait: true,
+    });
+  },
+
+  getSessions: async (query: AdminSessionsQuery = {}): Promise<{ sessions: AdminSession[]; total: number }> => {
+    return apiRequest(`/api/admin/sessions${buildQuery({ ...query })}`, { auth: 'admin' });
+  },
+
+  getSession: async (id: string): Promise<AdminSessionDetail> => {
+    return apiRequest<AdminSessionDetail>(`/api/admin/sessions/${encodeURIComponent(id)}`, { auth: 'admin' });
+  },
+
+  getMessages: async (query: AdminMessagesQuery = {}): Promise<{ messages: AdminMessage[]; total: number }> => {
+    return apiRequest(`/api/admin/messages${buildQuery({ ...query })}`, { auth: 'admin' });
+  },
+
+  getSurveys: async (query: AdminSurveysQuery = {}): Promise<{ responses: AdminSurveyResponse[]; total: number }> => {
+    return apiRequest(`/api/admin/surveys${buildQuery({ ...query })}`, { auth: 'admin' });
+  },
+
+  /**
+   * GET /api/admin/export?type=… — the CSV is streamed by the server; the key
+   * travels in a header, so the file is fetched as a blob and saved via an
+   * object URL rather than a plain link.
+   */
+  exportCsv: async (type: AdminExportType): Promise<void> => {
+    const response = await fetch(`${API_BASE_URL}/api/admin/export?type=${encodeURIComponent(type)}`, {
+      method: 'GET',
       headers: adminHeaders(),
+    }).catch(() => {
+      throw new ApiError('Unable to connect to the server. Please try again.', 'NETWORK_ERROR');
     });
-  },
 
-  getAllUsers: async () => {
-    return apiRequest<{
-      users: Array<{
-        id: string;
-        email: string;
-        assignedAgentId: number;
-        agentEQ: 'low' | 'medium' | 'high';
-        agentIQ: 'low' | 'medium' | 'high';
-        currentTopicIndex: number;
-        hasCompletedLiteracySurvey: boolean;
-        createdAt: string;
-        updatedAt: string;
-      }>;
-      total: number;
-    }>('/api/admin/users', {
-      headers: adminHeaders(),
-    });
-  },
+    if (!response.ok) {
+      if (response.status === 401) {
+        clearAdminKey();
+        throw new ApiError('Invalid admin key. Please enter the admin API key again.', 'ADMIN_UNAUTHORIZED', 401);
+      }
+      const envelopeError = await readEnvelopeError(response);
+      throw new ApiError(
+        envelopeError?.message || `Export failed (${response.status}).`,
+        envelopeError?.code || codeForStatus(response.status),
+        response.status
+      );
+    }
 
-  getAllMessages: async (filters?: { userId?: string; topicId?: number; limit?: number; offset?: number }) => {
-    const params = new URLSearchParams();
-    if (filters?.userId) params.append('userId', filters.userId);
-    if (filters?.topicId) params.append('topicId', filters.topicId.toString());
-    if (filters?.limit) params.append('limit', filters.limit.toString());
-    if (filters?.offset) params.append('offset', filters.offset.toString());
+    const blob = await response.blob();
+    const disposition = response.headers.get('Content-Disposition') || '';
+    const match = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(disposition);
+    const filename = match?.[1] || `study2-${type}-${new Date().toISOString().slice(0, 10)}.csv`;
 
-    const queryString = params.toString();
-    return apiRequest<{
-      messages: Array<{
-        id: string;
-        userId: string;
-        userEmail: string;
-        topicId: number;
-        topicTitle: string;
-        role: 'user' | 'agent';
-        content: string;
-        timestamp: string;
-      }>;
-      total: number;
-    }>(`/api/admin/messages${queryString ? `?${queryString}` : ''}`, {
-      headers: adminHeaders(),
-    });
-  },
-
-  getAllLiteracySurveyResponses: async (userId?: string) => {
-    const queryString = userId ? `?userId=${userId}` : '';
-    return apiRequest<{
-      responses: Array<{
-        id: string;
-        userId: string;
-        userEmail: string;
-        questionId: string;
-        responseValue: string;
-        createdAt: string;
-      }>;
-      total: number;
-    }>(`/api/admin/surveys/literacy${queryString}`, {
-      headers: adminHeaders(),
-    });
-  },
-
-  getAllPostTopicSurveyResponses: async (filters?: { userId?: string; topicId?: number }) => {
-    const params = new URLSearchParams();
-    if (filters?.userId) params.append('userId', filters.userId);
-    if (filters?.topicId) params.append('topicId', filters.topicId.toString());
-
-    const queryString = params.toString();
-    return apiRequest<{
-      responses: Array<{
-        id: string;
-        userId: string;
-        userEmail: string;
-        topicId: number;
-        topicTitle: string;
-        questionId: string;
-        responseValue: number;
-        createdAt: string;
-      }>;
-      total: number;
-    }>(`/api/admin/surveys/post-topic${queryString ? `?${queryString}` : ''}`, {
-      headers: adminHeaders(),
-    });
-  },
-
-  getUserData: async (userId: string) => {
-    return apiRequest<{
-      user: {
-        id: string;
-        email: string;
-        assignedAgentId: number;
-        agentEQ: 'low' | 'medium' | 'high';
-        agentIQ: 'low' | 'medium' | 'high';
-        currentTopicIndex: number;
-        hasCompletedLiteracySurvey: boolean;
-        createdAt: string;
-        updatedAt: string;
-      };
-      messages: Array<{
-        id: string;
-        topicId: number;
-        topicTitle: string;
-        role: 'user' | 'agent';
-        content: string;
-        timestamp: string;
-      }>;
-      literacySurveyResponses: Array<{
-        questionId: string;
-        responseValue: string;
-      }>;
-      postTopicSurveyResponses: Array<{
-        topicId: number;
-        topicTitle: string;
-        questionId: string;
-        responseValue: number;
-      }>;
-      topicInteractions: Array<{
-        id: string;
-        topicId: number;
-        topicTitle: string;
-        interactionCount: number;
-        isLocked: boolean;
-        surveyCompleted: boolean;
-        createdAt: string;
-        updatedAt: string;
-      }>;
-    }>(`/api/admin/users/${userId}`, {
-      headers: adminHeaders(),
-    });
-  },
-};
-
-// Survey API
-export const surveyApi = {
-  submitLiteracy: async (responses: Array<{ questionId: string; value: number | string }>) => {
-    return apiRequest<{
-      message: string;
-      userState: {
-        hasCompletedLiteracySurvey: boolean;
-      };
-    }>('/api/surveys/literacy', {
-      method: 'POST',
-      body: JSON.stringify({ responses }),
-    });
-  },
-
-  submitPostTopic: async (topicId: number, responses: Array<{ questionId: string; value: number }>) => {
-    return apiRequest<{
-      message: string;
-      nextTopicUnlocked: boolean;
-      nextTopicIndex: number;
-    }>('/api/surveys/post-topic', {
-      method: 'POST',
-      body: JSON.stringify({ topicId, responses }),
-    });
-  },
-
-  getLiteracyStatus: async () => {
-    return apiRequest<{
-      hasCompleted: boolean;
-    }>('/api/surveys/literacy/status');
+    const objectUrl = window.URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = objectUrl;
+    anchor.download = filename;
+    anchor.style.display = 'none';
+    document.body.appendChild(anchor);
+    anchor.click();
+    document.body.removeChild(anchor);
+    window.URL.revokeObjectURL(objectUrl);
   },
 };

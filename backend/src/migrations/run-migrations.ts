@@ -1,105 +1,102 @@
-import { readFileSync } from 'fs';
+import { readdirSync, readFileSync } from 'fs';
 import { join } from 'path';
-import { query } from '../config/database';
+import { Pool } from 'pg';
+import pool, { closePool } from '../config/database';
 
-const migrations = [
-  '001_create_users.sql',
-  '002_create_agents.sql',
-  '003_create_topics.sql',
-  '004_create_messages.sql',
-  '005_create_interactions.sql',
-  '006_create_surveys.sql',
-  '007_create_guardrails.sql',
-  '008_create_triggers.sql',
-  '009_create_password_reset_tokens.sql',
-  '010_update_agents_intelligence_levels.sql',
-  '011_update_topics_research.sql',
-];
+/**
+ * Tracked, transactional migration runner.
+ *
+ * - Creates schema_migrations(filename PK, applied_at) if missing.
+ * - Applies every NNN_*.sql in this directory, in filename order, that is not yet recorded.
+ * - Each file runs inside ONE transaction as a single multi-statement query
+ *   (no manual ';' splitting), and its schema_migrations row is written in that
+ *   same transaction, so a failure leaves nothing half-applied.
+ * - Idempotent: re-running applies nothing new.
+ */
 
-async function runMigrations() {
-  console.log('Starting database migrations...');
+const MIGRATION_FILE_PATTERN = /^\d{3}_.+\.sql$/;
+
+export function listMigrationFiles(dir: string = __dirname): string[] {
+  return readdirSync(dir)
+    .filter((name) => MIGRATION_FILE_PATTERN.test(name))
+    .sort((a, b) => a.localeCompare(b, 'en'));
+}
+
+export interface MigrationResult {
+  applied: string[];
+  skipped: string[];
+}
+
+export async function runMigrations(
+  db: Pool = pool,
+  dir: string = __dirname,
+  log: (message: string) => void = console.log
+): Promise<MigrationResult> {
+  const client = await db.connect();
+  const result: MigrationResult = { applied: [], skipped: [] };
 
   try {
-    for (const migration of migrations) {
-      console.log(`Running migration: ${migration}`);
-      const sql = readFileSync(
-        join(__dirname, migration),
-        'utf-8'
-      );
-      
-      // Check if the file contains dollar-quoted strings (DO $$ blocks or triggers)
-      const hasDollarQuotedStrings = sql.includes('$$');
-      
-      // For files with dollar-quoted strings, execute as single statement
-      if (migration.includes('triggers') || hasDollarQuotedStrings) {
-        // Remove single-line comments but preserve the rest
-        const cleanedSql = sql
-          .split('\n')
-          .filter(line => !line.trim().startsWith('--'))
-          .join('\n')
-          .trim();
-        
-        try {
-          await query(cleanedSql);
-        } catch (error: any) {
-          if (error.code === '42P07' || error.code === '42710') {
-            console.log(`  (skipped - already exists)`);
-          } else {
-            throw error;
-          }
-        }
-      } else {
-        // Split by semicolon and execute each statement separately
-        // Remove comments and split by semicolon
-        const cleanedSql = sql
-          .split('\n')
-          .filter(line => !line.trim().startsWith('--'))
-          .join('\n');
-        
-        const statements = cleanedSql
-          .split(';')
-          .map(s => s.trim())
-          .filter(s => s.length > 0);
-        
-        for (const statement of statements) {
-          if (statement.trim()) {
-            try {
-              await query(statement);
-            } catch (error: any) {
-              // Ignore "already exists" errors for IF NOT EXISTS statements
-              if (error.code === '42P07' || error.code === '42710') {
-                console.log(`  (skipped - already exists)`);
-              } else if (error.code === '42703') {
-                // Column doesn't exist - might be a timing issue, try again
-                console.log(`  Warning: ${error.message}, retrying...`);
-                await new Promise(resolve => setTimeout(resolve, 100));
-                try {
-                  await query(statement);
-                } catch (retryError: any) {
-                  // If still fails, check if it's a real error or just timing
-                  if (retryError.code === '42703' && statement.includes('CREATE INDEX IF NOT EXISTS')) {
-                    console.log(`  (skipped index - column may not exist yet)`);
-                  } else {
-                    throw retryError;
-                  }
-                }
-              } else {
-                throw error;
-              }
-            }
-          }
-        }
-      }
-      
-      console.log(`✓ Completed: ${migration}`);
-    }
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS schema_migrations (
+        filename TEXT PRIMARY KEY,
+        applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
 
-    console.log('All migrations completed successfully!');
+    const appliedRows = await client.query<{ filename: string }>(
+      'SELECT filename FROM schema_migrations'
+    );
+    const alreadyApplied = new Set(appliedRows.rows.map((row) => row.filename));
+
+    for (const filename of listMigrationFiles(dir)) {
+      if (alreadyApplied.has(filename)) {
+        result.skipped.push(filename);
+        log(`  = ${filename} (already applied)`);
+        continue;
+      }
+
+      const sql = readFileSync(join(dir, filename), 'utf-8');
+      log(`  > ${filename}`);
+
+      await client.query('BEGIN');
+      try {
+        // A query without parameters uses the simple protocol, which accepts
+        // multiple statements (and dollar-quoted bodies) in one call.
+        await client.query(sql);
+        await client.query('INSERT INTO schema_migrations (filename) VALUES ($1)', [filename]);
+        await client.query('COMMIT');
+      } catch (error) {
+        await client.query('ROLLBACK');
+        throw new Error(
+          `Migration ${filename} failed and was rolled back: ${(error as Error).message}`
+        );
+      }
+      result.applied.push(filename);
+    }
+  } finally {
+    client.release();
+  }
+
+  return result;
+}
+
+async function main(): Promise<void> {
+  console.log('Running database migrations...');
+  try {
+    const { applied, skipped } = await runMigrations();
+    console.log(`Migrations complete: ${applied.length} applied, ${skipped.length} already applied.`);
+    await closePool();
     process.exit(0);
   } catch (error) {
-    console.error('Migration failed:', error);
+    console.error('Migration failed:', (error as Error).message);
+    await closePool().catch(() => undefined);
     process.exit(1);
   }
 }
 
-runMigrations();
+const isDirectRun =
+  typeof require !== 'undefined' && typeof module !== 'undefined' && require.main === module;
+
+if (isDirectRun) {
+  main();
+}
