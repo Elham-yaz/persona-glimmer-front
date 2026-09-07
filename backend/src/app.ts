@@ -58,54 +58,40 @@ app.use(helmet({
 app.use(
   cors({
     origin: (origin, callback) => {
-      // Allow requests with no origin (like mobile apps or curl requests)
+      // Allow requests with no origin (curl, server-to-server, health checks) —
+      // CORS is a browser mechanism and does not gate non-browser clients anyway
       if (!origin) return callback(null, true);
-      
+
+      // Parse the origin so all checks run against the actual hostname,
+      // never against a substring of the raw origin string
+      let originUrl: URL;
+      try {
+        originUrl = new URL(origin);
+      } catch {
+        return callback(new Error('Not allowed by CORS'));
+      }
+
       // In development, allow any localhost port
-      if (process.env.NODE_ENV === 'development' || !process.env.NODE_ENV) {
-        if (origin.startsWith('http://localhost:') || origin.startsWith('http://127.0.0.1:')) {
+      if (process.env.NODE_ENV !== 'production') {
+        if (originUrl.hostname === 'localhost' || originUrl.hostname === '127.0.0.1') {
           return callback(null, true);
         }
       }
-      
-      // In production, automatically allow Netlify domains
-      if (process.env.NODE_ENV === 'production') {
-        // Automatically allow any Netlify domain
-        if (origin.includes('.netlify.app')) {
-          return callback(null, true);
-        }
-        
-        // Allow FRONTEND_URL if set
-        if (process.env.FRONTEND_URL) {
-          // Allow exact match
-          if (origin === process.env.FRONTEND_URL) {
-            return callback(null, true);
-          }
-          // Also allow if origin starts with FRONTEND_URL (for subdomains)
-          if (origin.startsWith(process.env.FRONTEND_URL)) {
-            return callback(null, true);
-          }
-        }
-        
-        // If no FRONTEND_URL is set, allow all Netlify domains as fallback
-        if (!process.env.FRONTEND_URL && origin.includes('.netlify.app')) {
-          return callback(null, true);
-        }
+
+      // Exact match against FRONTEND_URL (normalized: no trailing slash)
+      const frontendUrl = (process.env.FRONTEND_URL || '').replace(/\/+$/, '');
+      if (frontendUrl && origin === frontendUrl) {
+        return callback(null, true);
       }
-      
-      // Fallback for development or if no production check matched
-      const defaultOrigins = [
-        process.env.FRONTEND_URL || 'http://localhost:5173',
-        'http://localhost:8083',
-        'http://localhost:8080',
-        'http://localhost:5173',
-      ];
-      
-      if (defaultOrigins.includes(origin)) {
-        callback(null, true);
-      } else {
-        callback(new Error('Not allowed by CORS'));
+
+      // Netlify deploys: exact hostname-suffix check over HTTPS.
+      // hostname.endsWith('.netlify.app') cannot be spoofed the way
+      // origin.includes('.netlify.app') could (e.g. x.netlify.app.evil.com)
+      if (originUrl.protocol === 'https:' && originUrl.hostname.endsWith('.netlify.app')) {
+        return callback(null, true);
       }
+
+      return callback(new Error('Not allowed by CORS'));
     },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],

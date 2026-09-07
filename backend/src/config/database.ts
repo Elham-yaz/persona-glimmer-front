@@ -4,12 +4,21 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 // Render databases require SSL for external connections
-const requiresSSL = process.env.DATABASE_URL?.includes('render.com') || 
+const requiresSSL = process.env.DATABASE_URL?.includes('render.com') ||
                     process.env.NODE_ENV === 'production';
+
+// Certificate verification is ON by default. If the provider's certificate does not
+// validate against the system CA bundle, either supply the CA via DATABASE_CA_CERT
+// (PEM contents) or — as a last resort — set DATABASE_SSL_NO_VERIFY=true to restore
+// the old unverified behavior.
+const sslNoVerify = process.env.DATABASE_SSL_NO_VERIFY === 'true';
+const caCert = process.env.DATABASE_CA_CERT;
 
 const poolConfig: PoolConfig = {
   connectionString: process.env.DATABASE_URL,
-  ssl: requiresSSL ? { rejectUnauthorized: false } : false,
+  ssl: requiresSSL
+    ? { rejectUnauthorized: !sslNoVerify, ...(caCert ? { ca: caCert } : {}) }
+    : false,
   max: 20,
   idleTimeoutMillis: 30000,
   connectionTimeoutMillis: 10000, // Increased to 10 seconds for Render database

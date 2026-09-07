@@ -31,3 +31,6 @@ backend/.env
 /data_folder_private
 docs/safe_keeping.md
 persona-glimmer-front.code-workspace
+render_api_info.txt
+NEW_ADMIN_KEY.local.txt
+deploy-fix-2026-08-30.txt
