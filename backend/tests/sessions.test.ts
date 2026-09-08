@@ -54,7 +54,7 @@ describe('POST /api/sessions', () => {
       ['code', 'id', 'participantScenario', 'scenarioType', 'title'].sort()
     );
     expect([1, 2, 3]).toContain(data.context.id);
-    expect(['food_utilitarian', 'food_hedonic', 'hotel_informational']).toContain(data.context.code);
+    expect(['food_utilitarian', 'food_hedonic', 'food_informational']).toContain(data.context.code);
     expect(data.openingMessage).toBe(data.context.participantScenario);
     expect(data.maxInteractions).toBe(MAX_INTERACTIONS);
     expect(data.interactionCount).toBe(0);
@@ -70,7 +70,7 @@ describe('POST /api/sessions', () => {
 
     const row = await dbSession(data.sessionId);
     expect(row.external_id).toBe('R_qualtrics123');
-    expect(row.prompt_version).toBe('2.0');
+    expect(row.prompt_version).toBe('2.1');
     expect(row.model).toBe('mock');
   });
 

@@ -71,7 +71,7 @@ src/
   models/                AgentCondition, Context, Session, SessionMessage, SessionSurveyResponse, SurveyQuestion, GlobalGuardrail
   services/              assignment (random | balanced), agent (prompt assembly), openai (MOCK_OPENAI support)
   migrations/            001-008 *.sql, run-migrations.ts, reset-database.ts
-  seeds/                 agent_conditions, contexts (hotel context is a marked PLACEHOLDER), survey_questions, guardrails
+  seeds/                 agent_conditions, contexts (the informational context 3 is a marked PLACEHOLDER), survey_questions, guardrails
   utils/                 errors, sanitize, completionCode
 tests/                   vitest + supertest integration tests
 ```

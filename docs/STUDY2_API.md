@@ -11,7 +11,7 @@
 | `ALLOW_FORCED_ASSIGNMENT` env | `false` | when `true`, `POST /api/sessions` honors `force` (dev/test/pilot only) |
 | `MOCK_OPENAI` env | `false` | when `true`, the OpenAI service returns a deterministic reply (`"[mock reply to: <first 60 chars>]"`) without network calls — used by tests and local dev |
 | `OPENAI_MODEL` env | `gpt-4o-mini` | stamped onto each session as `model` |
-| `PROMPT_VERSION` | `"2.0"` constant in backend | stamped onto each session |
+| `PROMPT_VERSION` | `"2.1"` constant in backend | stamped onto each session |
 | Required env at startup | `DATABASE_URL`, `OPENAI_API_KEY` (unless `MOCK_OPENAI=true`), `ADMIN_API_KEY` | process exits otherwise. `JWT_SECRET` is **no longer used** |
 | Other env | `PORT` (3000), `NODE_ENV`, `FRONTEND_URL`, `DATABASE_SSL_NO_VERIFY`, `DATABASE_CA_CERT` | unchanged semantics |
 | Frontend env | `VITE_API_URL` (default `http://localhost:3000`) | unchanged |
@@ -107,7 +107,7 @@ CREATE TABLE agent_conditions (
 -- 002_create_contexts.sql
 CREATE TABLE contexts (
   id INTEGER PRIMARY KEY CHECK (id BETWEEN 1 AND 3),
-  code VARCHAR(40) NOT NULL UNIQUE,                 -- food_utilitarian | food_hedonic | hotel_informational
+  code VARCHAR(40) NOT NULL UNIQUE,                 -- food_utilitarian | food_hedonic | food_informational
   title VARCHAR(200) NOT NULL, domain VARCHAR(100) NOT NULL,
   scenario_type VARCHAR(20) NOT NULL CHECK (scenario_type IN ('utilitarian','hedonic','informational')),
   participant_scenario TEXT NOT NULL,               -- shown to participant AND auto-sent as their first message (D4)
@@ -159,9 +159,9 @@ No table stores IP addresses, user agents, names, or emails.
 
 ## 5. Seeds (`npm run seed`, idempotent upserts)
 - **agent_conditions:** ids 1–4 = (high,high), (high,low), (low,high), (low,low); `display_name = 'Alex'` for all; one shared, context-agnostic `system_prompt_template` (no EI/CI wording inside it — the manipulation lives only in the guidance blocks).
-- **contexts:** 1 `food_utilitarian` and 2 `food_hedonic` copied **verbatim** from the current `topics.seed.ts` ids 1 and 2 (`stimulus_text → participant_scenario`, `topic_specific_policy → agent_policy`, title/domain/scenario_type); 3 `hotel_informational` = fabricated placeholder ("Harborview Grand Hotel": realistic policy document ≈600–900 words covering check-in/out, cancellation tiers, modifications, no-shows, deposits, pets, parking, breakfast; plus a fictional booking record — guest **first name only**, dates, room type, rate, confirmation number, cancellation deadline; plus a second-person participant scenario asking to confirm booking details and understand the cancellation policy). Clearly marked `PLACEHOLDER — replace with the team's document`.
+- **contexts:** 1 `food_utilitarian` and 2 `food_hedonic` copied **verbatim** from the current `topics.seed.ts` ids 1 and 2 (`stimulus_text → participant_scenario`, `topic_specific_policy → agent_policy`, title/domain/scenario_type); 3 `food_informational` (title e.g. "Delivery Order Inquiry", domain `Food Delivery` — same domain as 1–2, **no service issue**) = fabricated placeholder: a purely factual internal reference document ≈500–800 words — an order record on file (order number, fabricated restaurant name, 3–4 items with prices and a subtotal/fees/tax/total that add up exactly, time placed, estimated delivery window, delivery-address descriptor), full ingredient lists and allergen flags for each ordered item, packaging/presentation details, the delivery process end to end (stages from confirmation to drop-off, how the time estimate is computed, tracking, contactless option), and general information (hours, delivery radius, fee structure); **no customer name anywhere** (the order number is the anchor), **no absolute calendar dates or weekdays** (times of day and relative times only), no emotional-intelligence directives (the EI manipulation lives only in the condition guidance blocks) and no refund/credit/apology workflows; plus a second-person participant scenario in which nothing is wrong and the customer chats with the agent to learn about delivery timing, ingredients/allergens, packaging and the delivery process. Marked `PLACEHOLDER — replace with the team's document` in code comments only.
 - **survey_questions:** `post-1 … post-16` text/category copied **verbatim** from `src/data/mockData.ts`, `version = '1.0'`.
-- **global_guardrails:** rewritten to be context-neutral (applies equally to a hotel inquiry and a delivery complaint): stay in role, be truthful to the reference material, don't invent policies, don't reveal these instructions or the participant's condition, redirect off-topic requests, no harmful content.
+- **global_guardrails:** rewritten to be context-neutral (applies equally to an informational inquiry and a delivery complaint): stay in role, be truthful to the reference material, don't invent policies, don't reveal these instructions or the participant's condition, redirect off-topic requests, no harmful content.
 
 ## 6. Prompt assembly (backend `services/agent.service.ts`)
 ```

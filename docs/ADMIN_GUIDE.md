@@ -32,7 +32,7 @@ The header shows the active **assignment mode** (`random` or `balanced`) reporte
 - Six totals: sessions, in progress (fewer than 10 interactions), locked (10 interactions, survey not
   yet submitted), completed (survey submitted), messages, survey responses.
 - **Cell distribution**: a 4 x 3 table, agent condition (`hiEI_hiCI`, `hiEI_loCI`, `loEI_hiCI`,
-  `loEI_loCI`) by context (`food_utilitarian`, `food_hedonic`, `hotel_informational`). Each cell shows
+  `loEI_loCI`) by context (`food_utilitarian`, `food_hedonic`, `food_informational`). Each cell shows
   `started / completed` sessions, with row totals. This is the view to watch for balance during data
   collection.
 - The three **Export** buttons (sessions, messages, surveys).

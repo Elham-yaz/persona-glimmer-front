@@ -151,7 +151,7 @@ describe('admin data endpoints', () => {
     expect(data.agentCode).toMatch(/^(hi|lo)EI_(hi|lo)CI$/);
     expect(data.contextCode).toBe(session.context.code);
     expect(data.model).toBe('mock');
-    expect(data.promptVersion).toBe('2.0');
+    expect(data.promptVersion).toBe('2.1');
     expect(data.messages).toHaveLength(20);
     expect(data.messages.map((m: any) => m.sequence)).toEqual(Array.from({ length: 20 }, (_, i) => i + 1));
     expect(data.surveyResponses).toHaveLength(16);

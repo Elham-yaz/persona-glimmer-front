@@ -4,6 +4,13 @@ import pool from '../config/database';
 /**
  * Post-chat survey items. Text and category are copied VERBATIM from
  * src/data/mockData.ts (postTopicSurveyQuestions) at baseline commit 4116767.
+ *
+ * NOTE (open researcher decision — see docs/STUDY2_PLAN.md, launch checklist):
+ * post-6 ("resolved my issue") and post-10 ("sharing my concerns") presuppose a
+ * service issue, which the no-issue informational control context (context 3)
+ * does not have. Items are deliberately held constant across all contexts until
+ * the researcher decides to keep, reword, or condition them; do not reword here
+ * without that sign-off.
  */
 export const SURVEY_VERSION = '1.0';
 

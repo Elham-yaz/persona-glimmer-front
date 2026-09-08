@@ -8,13 +8,14 @@ This plan turns the current 20-topic, login-based, twice-weekly platform into a 
 
 | Item | Decision |
 |---|---|
-| Hotel content | **Fabricated placeholder content for now** (policy document, booking record, scenario) — contextual to the use case; the team will supply the real material later. Kept in one seed file so swapping is a single edit. |
+| Control-context content | **Fabricated placeholder content for now** (reference document, order record, scenario) — contextual to the use case; the team will supply the real material later. Kept in one seed file so swapping is a single edit. |
 | D2 database | **Clean slate.** Study-1 data is preserved in `data_folder_private/export_2026-08-30/` and git tag `snapshot-2026-08-30`; the production database is **wiped and recreated** with the v2 schema. The old migration set is replaced by a fresh v2 set and a tracked (`schema_migrations`) runner. |
 | D3 assignment | **Config flag** `ASSIGNMENT_MODE=random\|balanced`, **default `random`** (uniform over the 12 cells). |
 | D4 opening | **Keep the current setup:** the context's stimulus text is auto-sent as the participant's first message and **counts as interaction 1 of 10**; the agent replies. Made robust: the frontend sends it through the normal message endpoint with a deterministic idempotency key, so retries/refreshes cannot duplicate or skip it. |
 | D5 codes | **Unique** 5-digit completion codes (10000–99999), generated at survey submission, idempotent on re-submit. |
 | D10 deploys | **Unchanged for now:** backend from `Elham-yaz/main` (Render), frontend from `surjray/main` (Netlify). |
 | Everything else | Implementer's judgement, following the recommendations in §2 (neutral agent name, `?rid=` capture, error-and-retry on OpenAI failure with no persisted fallback, balanced/random flag, no PII). |
+| Control context *(amendment 2026-09-07)* | **Changed from a booking-inquiry scenario in a separate travel domain to a food-delivery informational context**, per researcher request: context 3 is now `food_informational` ("Delivery Order Inquiry"), same Food Delivery domain as contexts 1–2, with **no service issue** — the customer has a just-placed order and chats with the agent to learn about delivery timing, ingredients/allergens, packaging/presentation and the delivery process. Domain is now constant across all three contexts; the content remains a fabricated placeholder until the team supplies the final material. |
 
 ---
 
@@ -26,7 +27,7 @@ This plan turns the current 20-topic, login-based, twice-weekly platform into a 
 | Entry | Login/register page | Landing directly from a Qualtrics link |
 | AI-literacy survey | 8 questions on the platform | **Removed** (asked in Qualtrics) |
 | Agents | 9 (broken 3×3, contradictory prompts) | **4**, clean 2×2: EI {high, low} × CI {high, low} |
-| Contexts | 20 topics, sequential unlock | **3**, one per session: food-delivery utilitarian, food-delivery hedonic, **new** hotel-booking informational (no service issue) |
+| Contexts | 20 topics, sequential unlock | **3**, one per session: food-delivery utilitarian, food-delivery hedonic, **new** food-delivery informational (no service issue; amended 2026-09-07 — see §0) |
 | Assignment | Agent at registration; topics in fixed order | **Agent × context randomized on entry**, fixed for the session |
 | Progression | 10 interactions → survey → next topic ×20 | 10 interactions → survey → **completion code** → done |
 | Post-chat survey | 16 items per topic | Same 16 items, once |
@@ -55,7 +56,7 @@ Each item: **Decision → Recommendation → Why.** Items marked ❓ need resear
 
 **D7 — Agent display / blinding.** ❓ Show a single **neutral display name** (e.g., "Alex, Customer Support") for all four conditions so nothing in the UI hints at the manipulation. The four agents share one base persona template; the manipulation lives entirely in the EI and CI guidance blocks (reusing the existing `low`/`high` blocks; `medium` is dropped). This also fixes the current template/level contradictions.
 
-**D8 — Hotel context knowledge injection.** Convert the uploaded hotel policy document to plain text and store it in `contexts.agent_policy`; the prompt builder injects it as "Reference information" for that context (same slot the food policies use). gpt-4o-mini's context window makes even a multi-page policy fine — no retrieval layer needed. The hotel context also needs a small **fictional booking record** (guest name, dates, room type, confirmation number, rate) so the agent can answer "booking details" questions consistently. ❓ Content must come from the team.
+**D8 — Control-context knowledge injection** *(amended 2026-09-07: the control context is a food-delivery informational inquiry — see §0)*. Store the control context's reference material as plain text in `contexts.agent_policy`; the prompt builder injects it as "Reference information" for that context (same slot the food-failure policies use). gpt-4o-mini's context window makes even a multi-page document fine — no retrieval layer needed. The context also needs a small **fictional order record** (order number, restaurant name, ordered items with prices, time placed, estimated delivery window — no customer name) plus ingredient/allergen, packaging and delivery-process information so the agent can answer the informational question threads consistently. ❓ Content must come from the team.
 
 **D9 — Qualtrics linkage.** ❓ Recommend the Qualtrics link carry the response id (e.g. `…/#/?rid=${e://Field/ResponseID}`); the frontend passes it to `POST /api/sessions` and it's stored as `sessions.external_id`. This gives a **second join key** besides the hand-typed completion code (typos happen). Costs nothing; falls back gracefully if absent.
 
@@ -79,10 +80,10 @@ agent_conditions
 
 contexts
   id INTEGER PRIMARY KEY CHECK (id BETWEEN 1 AND 3),
-  code VARCHAR(40) UNIQUE,            -- 'food_utilitarian' | 'food_hedonic' | 'hotel_informational'
+  code VARCHAR(40) UNIQUE,            -- 'food_utilitarian' | 'food_hedonic' | 'food_informational'
   title, domain, scenario_type VARCHAR CHECK (IN ('utilitarian','hedonic','informational')),
-  participant_scenario TEXT,          -- what the participant reads (from topics 1–2 stimulus_text; new for hotel)
-  agent_policy TEXT,                  -- hidden: service policy / hotel policy doc + booking record
+  participant_scenario TEXT,          -- what the participant reads (from topics 1–2 stimulus_text; new for the informational context)
+  agent_policy TEXT,                  -- hidden: service policy / informational reference doc + order record
   created_at TIMESTAMPTZ
 
 sessions
@@ -174,10 +175,10 @@ Invariants enforced server-side: one context per session; max 10 interactions; s
 
 ## 6. Content needed from the research team (blocking for seeding)
 
-1. **Hotel context:** the policy document (PDF/DOCX/TXT — we convert to text); the fictional booking record the agent "knows"; the participant scenario text ("You have a booking at … and want to check …"); the agent opening line.
+1. **Control (informational) context:** the reference document (delivery timing, ingredients/allergens, packaging/presentation, the delivery process — PDF/DOCX/TXT, we convert to text); the fictional order record the agent "knows"; the participant scenario text ("You just placed an order at … and want to know …"); the agent opening line.
 2. **Food-delivery contexts:** confirm reuse of topics 1–2 verbatim (`Missing Food Item` utilitarian; `Messy Food Presentation` hedonic), or supply edits.
 3. **Four agent prompts:** confirm the shared base persona + existing EI/CI `low`/`high` guidance blocks are the intended manipulation, or supply wording.
-4. **Post-chat items:** confirm all 16 verbatim. ⚠️ At least `post-6` ("The agent resolved my issue to my satisfaction") presupposes a service issue — decide whether it stays for the hotel informational context, is reworded, or is context-conditional.
+4. **Post-chat items:** confirm all 16 verbatim. ⚠️ At least `post-6` ("The agent resolved my issue to my satisfaction") presupposes a service issue — decide whether it stays for the informational context, is reworded, or is context-conditional.
 5. **Global guardrails** text review (currently service-failure flavored).
 6. **Landing-page copy** (instructions; any consent line) and the **completion-screen wording**.
 7. **Agent display name(s)** (D7).
@@ -213,7 +214,7 @@ Shipped: admin key rotation + server-side verification. Carry into this rewrite:
 | 0 — Decisions & content | Resolve §11, receive §6 content | team-dependent |
 | 1 — Backend v2 | Migration, models, session API, prompt builder, admin v2, removals, tests | ~1.5–2 days |
 | 2 — Frontend v2 | Study flow, removals, api client, admin dashboard, completion screen | ~1.5 days |
-| 3 — Content & seeding | Hotel doc ingestion, 4 agents, 3 contexts, guardrails, questions | ~0.5 day |
+| 3 — Content & seeding | Control-context doc ingestion, 4 agents, 3 contexts, guardrails, questions | ~0.5 day |
 | 4 — Verify & deploy | Local e2e, migrate, deploy both, smoke, pilot across 12 cells | ~0.5–1 day |
 | 5 — Docs | Update ARCHITECTURE.md / README for v2; ops runbook | ~0.5 day |
 

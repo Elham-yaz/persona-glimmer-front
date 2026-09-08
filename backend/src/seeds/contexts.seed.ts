@@ -8,12 +8,14 @@ import pool from '../config/database';
  * at baseline commit 4116767: stimulus_text -> participant_scenario,
  * topic_specific_policy -> agent_policy, plus title / domain / scenario_type.
  *
- * Context 3 (hotel_informational) is a PLACEHOLDER — replace with the team's document.
- * Everything in it (policy, booking record, scenario) is fabricated and lives only in this
- * file so that swapping in the real material is a single edit.
+ * Context 3 (food_informational) is a PLACEHOLDER — replace with the team's document.
+ * Everything in it (policy, order record, scenario) is fabricated and lives only in this
+ * file so that swapping in the real material is a single edit. It is the study's control
+ * context: same domain as contexts 1-2, but nothing has gone wrong — the customer only
+ * wants information about a just-placed order.
  *
  * The placeholder marker exists ONLY at code level (this comment, the per-field comments
- * below, and HOTEL_CONTEXT_PLACEHOLDER_NOTE, which `npm run seed` prints). It must never be
+ * below, and INFORMATIONAL_CONTEXT_PLACEHOLDER_NOTE, which `npm run seed` prints). It must never be
  * part of participant_scenario or agent_policy: agent_policy is pasted verbatim into the
  * agent's system prompt (## Reference Information), and a model told that its reference
  * material is a fabricated placeholder can repeat that to participants.
@@ -30,8 +32,8 @@ export interface ContextSeed {
 }
 
 /** Code-level marker for context 3; logged by the seed runner, never seeded or shown to the model. */
-export const HOTEL_CONTEXT_PLACEHOLDER_NOTE =
-  'PLACEHOLDER — replace with the team\'s document. The policy, booking record, and scenario for context 3 (hotel_informational) are fabricated for development and pilot testing; edit backend/src/seeds/contexts.seed.ts to swap in the real material.';
+export const INFORMATIONAL_CONTEXT_PLACEHOLDER_NOTE =
+  'PLACEHOLDER — replace with the team\'s document. The policy, order record, and scenario for context 3 (food_informational) are fabricated for development and pilot testing; edit backend/src/seeds/contexts.seed.ts to swap in the real material.';
 
 export const contexts: ContextSeed[] = [
   {
@@ -90,85 +92,85 @@ ESCALATION TRIGGERS:
   },
   {
     id: 3,
-    code: 'hotel_informational',
-    title: 'Hotel Booking Inquiry',
-    domain: 'Hotel Booking',
+    code: 'food_informational',
+    title: 'Delivery Order Inquiry',
+    domain: 'Food Delivery',
     scenario_type: 'informational',
     // PLACEHOLDER — replace with the team's document (second-person participant scenario).
-    participant_scenario: `You have an upcoming stay at the Harborview Grand Hotel. You booked a Deluxe King room with a harbor view for three nights, arriving Friday, October 17 and checking out Monday, October 20. The reservation is under your first name, Jordan, and your confirmation number is HG-7R4K2M. A friend may join you for the weekend and your plans are not fully settled yet, so you want to make sure the booking details on file are correct—the dates, the room type, and the nightly rate—and understand exactly how the hotel's cancellation policy applies to your reservation: how late you can cancel without being charged, what it would cost to cancel after that point, and whether you could change the dates instead. Nothing has gone wrong with your booking; you are simply contacting the hotel's support chat to confirm the details and get clear information before you commit to your plans.`,
-    // PLACEHOLDER — replace with the team's document (hotel policy + fictional booking record).
+    participant_scenario: `You just ordered dinner through a delivery app from Olive & Thyme, a Mediterranean restaurant you have not tried before. The order went through smoothly—a grilled chicken souvlaki plate, a falafel wrap, lemon herb roasted potatoes, and baklava, under order number FD-83921—and the kitchen is preparing it now. Nothing is wrong; you are simply curious. You want to know when the food will arrive and how the delivery time is estimated, what goes into each dish and whether anything contains allergens, how the food is packaged and presented, and how delivery works from kitchen to door. You open the support chat to ask about your order.`,
+    // PLACEHOLDER — replace with the team's document (order record + factual reference information).
     // Keep this text free of any placeholder / fabricated / fictional wording: it is prompt-visible.
-    agent_policy: `HARBORVIEW GRAND HOTEL — GUEST RESERVATION POLICIES
+    // Keep it PURELY FACTUAL: no emotional-intelligence directives (the EI manipulation lives only
+    // in the condition guidance blocks) and no complaint-remediation framing (nothing is wrong).
+    // No customer name anywhere (the order number is the anchor); no weekdays or calendar dates.
+    agent_policy: `FOOD DELIVERY SUPPORT — ORDER INFORMATION REFERENCE
 
-1. CHECK-IN AND CHECK-OUT
-- Check-in begins at 3:00 PM. Early check-in from 12:00 PM may be requested and is granted subject to availability at no charge; guaranteed early check-in (from 10:00 AM) can be purchased for $40.
-- Check-out is by 11:00 AM. Late check-out until 1:00 PM is complimentary on request when occupancy allows; late check-out until 4:00 PM is $50. Departures after 4:00 PM are charged one additional night at the booked rate.
-- A government-issued photo ID and a valid credit card in the guest's name are required at check-in. Guests must be at least 21 years old to register.
+ORDER RECORD ON FILE
+Order number: FD-83921
+Restaurant: Olive & Thyme (Mediterranean); the food is cooked in the restaurant's own kitchen
+Items:
+- 1x Grilled Chicken Souvlaki Plate — $16.50
+- 1x Falafel Wrap — $11.25
+- 1x Lemon Herb Roasted Potatoes (side) — $6.75
+- 1x Baklava (2 pieces) — $5.50
+Subtotal: $40.00
+Delivery fee: $3.99
+Service fee (10% of subtotal): $4.00
+Tax (8% of subtotal): $3.20
+Total: $51.19, paid in full through the app at checkout
+Time placed: 6:40 PM this evening
+Estimated delivery window: 7:25 PM to 7:40 PM (45 to 60 minutes after checkout)
+Delivery address: the residential address saved in the customer's app profile, about 2.4 miles from the restaurant
+Handoff preference: hand to the customer at the door (contactless drop-off can be switched on any time before arrival)
 
-2. RESERVATION RATES
-- Flexible Rate: fully refundable if cancelled before the cancellation deadline (see section 3); no prepayment; the card on file is charged at check-out.
-- Advance Purchase Rate (typically 15% below the Flexible Rate): charged in full at the time of booking; non-refundable and non-changeable, except as noted in section 4.
-- All rates are per room, per night; they exclude a 12% occupancy tax and a $28 nightly destination fee (covers Wi-Fi, fitness center, business center, and local calls) and are quoted for up to two adults. Each additional adult is $35 per night. Children 17 and under stay free in existing bedding.
+MENU & INGREDIENT INFORMATION (ITEMS ON THIS ORDER)
 
-3. CANCELLATION TIERS (FLEXIBLE RATE)
-- Cancelled 72 hours (3 days) or more before 3:00 PM local time on the arrival date: no charge.
-- Cancelled between 72 and 24 hours before 3:00 PM on the arrival date: one night's room rate plus tax is charged.
-- Cancelled less than 24 hours before 3:00 PM on the arrival date, or not cancelled at all: the full reserved stay is charged (see section 5).
-- Peak dates (December 20 through January 2, and city-wide event weekends flagged at booking) require cancellation 7 days before arrival; later cancellations forfeit the first two nights.
-- Cancellations may be made online, in the mobile app, or through guest services. A cancellation number is issued and should be kept as proof of cancellation.
+Grilled Chicken Souvlaki Plate
+- Ingredients: chicken breast marinated in olive oil, lemon juice, garlic, dried oregano, and black pepper, grilled on skewers; rice pilaf (basmati rice, orzo, butter, vegetable stock); tzatziki sauce (strained yogurt, cucumber, garlic, dill, olive oil); tomato-and-cucumber salad; one warm pita.
+- Allergens: dairy (butter, yogurt); gluten/wheat (orzo, pita).
+- Prep notes: grilled to order over an open flame; not spicy; tzatziki packed on the side.
 
-4. MODIFICATIONS
-- Flexible Rate reservations may be modified (dates, room type, number of guests) free of charge until the cancellation deadline, subject to availability. The rate for new dates is the rate in effect at the time of the change.
-- Shortening a stay after check-in is treated as an early departure: a fee equal to one night's rate applies unless notice is given by 11:00 AM on the day before the new departure date.
-- Advance Purchase reservations cannot be changed. A one-time date change within the same calendar year may be requested at least 14 days before arrival for a $75 change fee, with any rate difference payable at the time of the change.
+Falafel Wrap
+- Ingredients: falafel (chickpeas, onion, parsley, cilantro, garlic, cumin, coriander, baking soda, sesame seeds) fried in sunflower oil; tahini sauce (ground sesame, lemon juice, garlic); lettuce; tomato; pickled turnip; wheat-flour lavash flatbread.
+- Allergens: sesame (falafel and tahini); gluten/wheat (lavash).
+- Prep notes: fully plant-based; mildly seasoned; tahini drizzled inside the wrap.
 
-5. NO-SHOWS
-- A guest who has not checked in by 11:59 PM on the arrival date without notifying the hotel is recorded as a no-show. The remainder of the reservation is cancelled, and the no-show charge is the full amount of the reserved stay (Flexible Rate) or the prepaid amount (Advance Purchase).
+Lemon Herb Roasted Potatoes (side)
+- Ingredients: potatoes, olive oil, lemon juice, garlic, dried oregano, rosemary, sea salt, black pepper.
+- Allergens: none of the major allergens.
+- Prep notes: oven-roasted; plant-based; made without gluten-containing ingredients.
 
-6. DEPOSITS, HOLDS, AND REFUNDS
-- Flexible Rate: no deposit is taken. At check-in a hold of $100 per night (up to $500) is placed on the guest's card for incidentals and released within 5 to 7 business days after check-out.
-- Advance Purchase: full prepayment at booking; the incidentals hold also applies at check-in.
-- Refunds are issued to the original payment method within 7 to 10 business days.
-- Documented emergencies (hospitalization, bereavement, government travel restrictions) may qualify for a one-time waiver of cancellation or no-show charges at the duty manager's discretion; supporting documentation is required within 14 days.
+Baklava (2 pieces)
+- Ingredients: phyllo pastry (wheat flour), walnuts, pistachios, butter, sugar, honey, lemon juice, cinnamon.
+- Allergens: tree nuts (walnuts, pistachios); gluten/wheat (phyllo); dairy (butter).
+- Prep notes: baked fresh each morning; served at room temperature.
 
-7. PETS
-- Dogs and cats up to 50 lbs are welcome in designated pet-friendly rooms (maximum two pets per room) for a non-refundable fee of $75 per stay.
-- Service animals stay free of charge in any room type.
-- Pets may not be left unattended in guest rooms and are not permitted in the restaurant, pool area, or fitness center.
+Cross-contact note: all items come from one shared kitchen, so no item can be guaranteed completely free of any allergen; full ingredient statements for other menu items are available on request.
 
-8. PARKING
-- Valet parking: $45 per night with unlimited in-and-out privileges. Self-parking in the adjacent Harbor Street garage: $32 per night (no in-and-out privileges).
+PACKAGING & PRESENTATION
+- Hot items (souvlaki plate, potatoes) travel in vented compostable fiber containers that hold heat while letting steam escape, so nothing arrives soggy.
+- The falafel wrap is rolled in foil-lined paper and sleeved to keep its shape.
+- Sauces ship in separate sealed 2 oz cups, and the pita is wrapped in foil, so nothing soaks in transit.
+- The baklava is boxed on its own, away from the hot items, so the pastry stays crisp.
+- Every container is closed with a tamper-evident seal, and the full order travels in a sealed insulated thermal bag labeled with the order number.
+- A printed order slip is inside the bag. Cutlery and napkins are included only when "include utensils" is selected at checkout; it was not selected on this order.
 
-9. BREAKFAST AND DINING
-- The Harborview Breakfast (buffet plus made-to-order eggs) is served daily from 6:30 to 10:30 AM (until 11:00 AM on weekends) in the Quayside Restaurant: $32 per adult, $16 per child aged 6 to 12, free for children 5 and under.
-- The Bed & Breakfast package includes breakfast for two per night. Breakfast is not included in the Flexible or Advance Purchase rates unless the confirmation states otherwise.
+DELIVERY PROCESS (ORDER CONFIRMATION TO DROP-OFF)
+1. Order confirmed — the restaurant accepts the order within about a minute of checkout; the app status changes to "Preparing".
+2. Preparation — the kitchen cooks the order; this restaurant's typical prep time at dinner hours is 20 to 25 minutes.
+3. Courier assignment — a nearby courier is matched shortly before the food is ready; the courier's photo and vehicle type appear on the tracking screen.
+4. Pickup — the courier matches the order number on the bag to the app and checks the seals before leaving.
+5. In transit — the app shows the courier's live location on a map; the arrival estimate updates in real time.
+6. Drop-off — the courier hands over the bag at the door, or leaves it with a photo confirmation when contactless drop-off is selected. The app sends a notification at pickup and again on arrival.
 
-10. OTHER HOUSE RULES
-- All guest rooms and indoor public areas are non-smoking; a $350 cleaning fee is charged for smoking in a room.
-- Cribs are free on request; rollaway beds are $30 per night in room types that permit them.
+How the estimate is computed: the quoted window combines the kitchen's current load, the restaurant's average prep time, the distance to the delivery address, and live traffic; it updates automatically in the app whenever any of these change.
 
----------------------------------------------------------------
-BOOKING RECORD ON FILE
-Confirmation number: HG-7R4K2M
-Guest first name: Jordan
-Property: Harborview Grand Hotel, 200 Quayside Drive
-Arrival: Friday, October 17, 2026 (check-in from 3:00 PM)
-Departure: Monday, October 20, 2026 (check-out by 11:00 AM) — 3 nights
-Room: Deluxe King, Harbor View (1 king bed, up to 2 adults), non-smoking, high floor requested
-Guests on reservation: 2 adults
-Rate plan: Flexible Rate — $289.00 per night, excluding 12% occupancy tax and the $28 nightly destination fee
-Payment: no prepayment; card on file (ending 4417) charged at check-out
-Estimated total: $867.00 room + $104.04 occupancy tax + $84.00 destination fee = $1,055.04
-Cancellation deadline: Tuesday, October 14, 2026 at 3:00 PM local time (72 hours before arrival)
-  - Cancel by the deadline: no charge
-  - Cancel after the deadline but before 3:00 PM on Thursday, October 16: one night ($289.00) plus tax
-  - Cancel after 3:00 PM on October 16, or no-show: full stay charged
-Modifications: free until the cancellation deadline, subject to availability
-Special requests noted: high floor, away from the elevator (requests are not guaranteed)
-Parking: none reserved
-Breakfast: not included
-Pets: none noted
-Booked: September 3, 2026 via the hotel website`,
+GENERAL INFORMATION
+- Olive & Thyme accepts delivery orders from 11:00 AM to 9:30 PM daily.
+- Delivery radius: about 6 miles; this order's address is well inside it.
+- Fees: the delivery fee ranges from $1.99 to $5.99 by distance; a 10% service fee applies to every order; orders under $15.00 carry a $2.00 small-order fee (not applied here). Tips go entirely to the courier and can be adjusted up to 2 hours after delivery.
+- Changes: items can be added or removed from the order screen while the status is "Preparing"; once the courier picks up the bag, the order is final.
+- If a problem ever arises with a delivery, standard support processes exist in the app's help section.`,
   },
 ];
 

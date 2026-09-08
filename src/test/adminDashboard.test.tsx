@@ -37,7 +37,7 @@ const fail = (status: number, code: string, message: string) =>
   fakeResponse(status, { success: false, error: { code, message } });
 
 const AGENT_CODES: Record<number, string> = { 1: 'hiEI_hiCI', 2: 'hiEI_loCI', 3: 'loEI_hiCI', 4: 'loEI_loCI' };
-const CONTEXT_CODES: Record<number, string> = { 1: 'food_utilitarian', 2: 'food_hedonic', 3: 'hotel_informational' };
+const CONTEXT_CODES: Record<number, string> = { 1: 'food_utilitarian', 2: 'food_hedonic', 3: 'food_informational' };
 
 function makeDashboard(): AdminDashboardData {
   const cells: AdminDashboardData['cells'] = [];
@@ -78,7 +78,7 @@ function makeSessions(): AdminSession[] {
       surveyCompleted: true,
       completionCode: 48213,
       model: 'gpt-4o-mini',
-      promptVersion: '2.0',
+      promptVersion: '2.1',
       createdAt: '2026-09-06T10:00:00.000Z',
       lockedAt: '2026-09-06T10:20:00.000Z',
       completedAt: '2026-09-06T10:25:00.000Z',
@@ -89,13 +89,13 @@ function makeSessions(): AdminSession[] {
       agentConditionId: 4,
       agentCode: 'loEI_loCI',
       contextId: 3,
-      contextCode: 'hotel_informational',
+      contextCode: 'food_informational',
       interactionCount: 3,
       isLocked: false,
       surveyCompleted: false,
       completionCode: null,
       model: 'gpt-4o-mini',
-      promptVersion: '2.0',
+      promptVersion: '2.1',
       createdAt: '2026-09-06T11:00:00.000Z',
       lockedAt: null,
       completedAt: null,
@@ -263,8 +263,8 @@ describe('AdminDashboard', () => {
     expect(rowA).toHaveTextContent('food_hedonic');
     expect(rowA).toHaveTextContent('Completed');
     expect(rowA).toHaveTextContent('48213');
-    expect(rowA).toHaveTextContent('gpt-4o-mini · v2.0');
-    const rowB = screen.getByText('hotel_informational').closest('tr') as HTMLElement;
+    expect(rowA).toHaveTextContent('gpt-4o-mini · v2.1');
+    const rowB = screen.getByText('food_informational').closest('tr') as HTMLElement;
     expect(rowB).toHaveTextContent('In progress');
 
     // Detail view: transcript in sequence order + survey responses + code
@@ -314,7 +314,7 @@ describe('AdminDashboard', () => {
     await waitFor(() => expect(sessionsCalls(calls)).toHaveLength(2));
     expect(sessionsCalls(calls)[1].query.get('status')).toBe('completed');
     await waitFor(() => expect(screen.getByRole('tab', { name: /^Sessions \(1\)$/ })).toBeInTheDocument());
-    expect(screen.queryByText('hotel_informational')).not.toBeInTheDocument();
+    expect(screen.queryByText('food_informational')).not.toBeInTheDocument();
 
     // Refresh must re-fetch with the SAME filters, not the initial empty ones
     fireEvent.click(screen.getByRole('button', { name: /Refresh/ }));
@@ -326,7 +326,7 @@ describe('AdminDashboard', () => {
     await screen.findByText('R_qualtrics_A');
     expect(screen.getByRole('tab', { name: /^Sessions \(1\)$/ })).toHaveAttribute('aria-selected', 'true');
     expect((screen.getByLabelText('Filter by status') as HTMLSelectElement).value).toBe('completed');
-    expect(screen.queryByText('hotel_informational')).not.toBeInTheDocument();
+    expect(screen.queryByText('food_informational')).not.toBeInTheDocument();
   });
 
   it('a rejected key stays on the gate and stores nothing', async () => {

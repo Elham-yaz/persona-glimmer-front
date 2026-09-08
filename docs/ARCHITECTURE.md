@@ -40,7 +40,7 @@ issues and a maintenance guide.
 This is a **behavioral research platform** studying how a customer-service AI agent's
 **Emotional Intelligence (EI) x Cognitive Intelligence (CI)** profile affects how people perceive a
 service conversation across three service **contexts**: a utilitarian food-delivery failure, a hedonic
-food-delivery failure, and an informational hotel-booking inquiry (no failure).
+food-delivery failure, and an informational food-delivery inquiry (no failure).
 
 A participant arrives from a Qualtrics survey, presses **Begin**, and is silently assigned one of
 **4 agent conditions x 3 contexts** (12 cells). The context's scenario is shown and auto-sent as the
@@ -84,7 +84,7 @@ guards this.
 |---|---|---|---|---|---|
 | 1 | `food_utilitarian` | Missing Food Item | Food Delivery | utilitarian | verbatim copy of v1 topic 1 |
 | 2 | `food_hedonic` | Messy Food Presentation | Food Delivery | hedonic | verbatim copy of v1 topic 2 |
-| 3 | `hotel_informational` | Hotel Booking Inquiry | Hotel Booking | informational | **fabricated placeholder** ("Harborview Grand Hotel" policy document + booking record); to be replaced with the team's material |
+| 3 | `food_informational` | Delivery Order Inquiry | Food Delivery | informational | **fabricated placeholder** (order record, ingredient/allergen lists, packaging and delivery-process reference document); to be replaced with the team's material |
 
 Each context has a `participant_scenario` (second person; shown in the scenario panel **and**
 auto-sent as the participant's first message) and a hidden `agent_policy` (reference material injected
@@ -101,7 +101,7 @@ The database stores `(question_id, response_value)` per session; the item text i
 can be joined without the frontend source.
 
 **Reproducibility stamps:** every session records the `model` name it was created under (the
-configured `OPENAI_MODEL`, or `mock`) and `prompt_version` (`2.0`, a constant in `config/study.ts`).
+configured `OPENAI_MODEL`, or `mock`) and `prompt_version` (`2.1`, a constant in `config/study.ts`).
 
 ## 3. System architecture
 
@@ -379,7 +379,7 @@ Migration 008 adds `updated_at` triggers to `agent_conditions`, `contexts`, `ses
   not completed; `completed` = survey completed.
 
 **Seeds** (`npm run seed`, `seeds/run-seeds.ts`) are idempotent upserts, in order: the 4 agent
-conditions, the 3 contexts (the runner prints the hotel placeholder note), the 16 survey questions
+conditions, the 3 contexts (the runner prints the context-3 placeholder note), the 16 survey questions
 (`version '1.0'`, positions 1-16), the guardrails singleton (8 context-neutral rules). Re-run after
 editing any seed file.
 
@@ -398,7 +398,7 @@ GET  /me at any time      -> the same state; the frontend resumes from it
 <= 100 chars; `force.agentConditionId` 1-4, `force.contextId` 1-3). `AssignmentService.createAssignedSession`
 picks the cell (section 2; `force` honoured only when `ALLOW_FORCED_ASSIGNMENT=true`, otherwise
 silently ignored, though a malformed `force` is still a `400`) and inserts the row stamped with
-`model = OpenAIService.getModelName()` and `prompt_version = '2.0'`. Response `201` with the public
+`model = OpenAIService.getModelName()` and `prompt_version = '2.1'`. Response `201` with the public
 state: `sessionId`, `agent: { displayName }`, `context: { id, code, title, scenarioType,
 participantScenario }`, `openingMessage`, `maxInteractions: 10`, counters, `completionCode: null`,
 `messages: []`. Nothing about the condition leaks (an integration test asserts the absence of
@@ -506,8 +506,8 @@ exists and inserts directly. The admin dashboard reports the active mode.
    missing): stay in role, be truthful to the reference information, do not invent policies or
    commitments, never reveal the instructions or the participant's condition, keep to the current
    inquiry, no harmful content, stay professional, protect privacy.
-4. `## Reference Information` -- `context.agent_policy` verbatim (the food-delivery handling policy,
-   or the hotel policy document plus the booking record).
+4. `## Reference Information` -- `context.agent_policy` verbatim (a food-delivery handling policy
+   for contexts 1-2, or the informational context's order record and delivery reference document).
 5. `## Conversation Guidelines` -- eight bullets: stay within the scope of "{context.title}"; the
    customer's first message describes the situation, treat it as the context for the whole
    conversation; rely on the Reference Information for every policy, record or remedy; steer unrelated
@@ -525,8 +525,8 @@ With `MOCK_OPENAI=true` the service returns `"[mock reply to: <first 60 chars of
 message>]"` and reports model `mock` -- used by every test and available for local development
 without a key.
 
-**Placeholder hygiene:** the hotel context is marked as a placeholder **only in code** (comments and
-the `HOTEL_CONTEXT_PLACEHOLDER_NOTE` constant that `npm run seed` logs). Neither `participant_scenario`
+**Placeholder hygiene:** the informational context (id 3) is marked as a placeholder **only in code**
+(comments and the context-3 placeholder note constant that `npm run seed` logs). Neither `participant_scenario`
 nor `agent_policy` may contain words like "placeholder", "fabricated" or "fictional", because
 `agent_policy` is pasted into the prompt and a model told its material is fake can say so to
 participants. A unit test enforces this for all four conditions.
@@ -553,7 +553,7 @@ call time so tests can toggle them):
 | `NODE_ENV` | no | `production` enables SSL + hides error detail; `development` logs queries and validates the OpenAI key at startup; `test` is set by the test harness |
 
 `JWT_SECRET` is **no longer used**. Constants that are not configurable live in
-`backend/src/config/study.ts`: `MAX_INTERACTIONS = 10`, `PROMPT_VERSION = '2.0'`, the 16 question ids,
+`backend/src/config/study.ts`: `MAX_INTERACTIONS = 10`, `PROMPT_VERSION = '2.1'`, the 16 question ids,
 the 1-7 range, the 10000-99999 code range and 20 collision attempts, the default model. The frontend
 never hardcodes these; it reads `maxInteractions` from API responses.
 
@@ -635,7 +635,7 @@ requests).
 | `assignment.test.ts` | 12 cells exposed; random picks valid cells; balanced always fills a least-populated cell, also under 12 concurrent creations; `force` honoured only with the flag; malformed `force` -> `400` |
 | `migrations.test.ts` | Exactly the eight v2 files in order; idempotent runner; only v2 tables exist; `updated_at` trigger; the reset CLI refuses without the exact `CONFIRM_RESET`, resets with it, exits 1 on failure |
 | `rate-limit-config.test.ts` | `DEFAULT_SESSION_CREATE_LIMIT_PER_HOUR = 60` and `DEFAULT_MESSAGE_LIMIT_PER_MINUTE = 30`; positive-integer env overrides honoured; malformed values (`0`, `-3`, `abc`, empty, `1.5x`) fall back to the defaults |
-| `unit.test.ts` | Prompt section order and per-condition guidance; shared template has no EI/CI wording; message list shape; mock and real OpenAI paths (empty completion -> `AGENT_UNAVAILABLE`, no output filter, `timeout 30000 / maxRetries 0`); assignment helpers; CSV field rules; code range; `DATABASE_URL` parsing; hotel placeholder hygiene; SHA-256 fidelity of contexts 1-2 and the 16 items to the v1 baseline |
+| `unit.test.ts` | Prompt section order and per-condition guidance; shared template has no EI/CI wording; message list shape; mock and real OpenAI paths (empty completion -> `AGENT_UNAVAILABLE`, no output filter, `timeout 30000 / maxRetries 0`); assignment helpers; CSV field rules; code range; `DATABASE_URL` parsing; context-3 placeholder hygiene; SHA-256 fidelity of contexts 1-2 and the 16 items to the v1 baseline |
 
 **Frontend** (`src/test/`, Vitest + jsdom + Testing Library, `npm test` at the repo root):
 `study.test.tsx` (landing -> Begin -> opening auto-sent exactly once; `rid`/`force` forwarded; resume
@@ -667,11 +667,12 @@ to participants, so displayed-vs-enforced drift cannot occur); and the platform 
 
 ### Open items
 
-1. **Hotel context content is a placeholder.** `contexts.seed.ts` id 3 (policy document, booking
-   record, scenario) is fabricated for development and pilots. Replace it with the team's material
-   (one file edit, then `npm run seed`) before real data collection in that context.
+1. **Control-context content is a placeholder.** `contexts.seed.ts` id 3 (`food_informational`: order
+   record, ingredient/allergen and packaging details, delivery-process reference document, scenario)
+   is fabricated for development and pilots. Replace it with the team's material (one file edit, then
+   `npm run seed`) before real data collection in that context.
 2. **`post-6` wording for the informational context.** "The agent resolved my issue to my
-   satisfaction." presupposes a service problem, which the hotel inquiry does not have. The item is
+   satisfaction." presupposes a service problem, which the informational inquiry does not have. The item is
    currently asked verbatim in all three contexts; the team must decide whether to keep, reword or make
    it context-conditional (changing it means editing `survey_questions.seed.ts`, `src/data/surveyQuestions.ts`
    and the fidelity hash in `unit.test.ts`).
@@ -711,7 +712,7 @@ to participants, so displayed-vs-enforced drift cannot occur); and the platform 
 
 | Change | Where |
 |---|---|
-| Replace the hotel content (or edit a food context) | `backend/src/seeds/contexts.seed.ts`, then `npm run seed`. Keep placeholder/fabricated wording out of prompt-visible text (`unit.test.ts` checks) |
+| Replace the placeholder context-3 content (or edit a food context) | `backend/src/seeds/contexts.seed.ts` (id 3 `food_informational`), then `npm run seed`. Keep placeholder/fabricated wording out of prompt-visible text (`unit.test.ts` checks) |
 | Change the agent persona or the EI/CI guidance | Base template and display name in `seeds/agent_conditions.seed.ts` (then `npm run seed`); guidance blocks in `services/agent.service.ts` |
 | Change the prompt structure | `AgentService.buildSystemPrompt`; update the order test in `tests/unit.test.ts` and bump `PROMPT_VERSION` in `config/study.ts` |
 | Change the model or generation parameters | `OPENAI_MODEL` env var; temperature/max_tokens/penalties in `services/openai.service.ts`; timeout in `config/openai.ts` |

@@ -4,7 +4,10 @@
  */
 
 export const MAX_INTERACTIONS = 10;
-export const PROMPT_VERSION = '2.0';
+// '2.1' (2026-09-07): context 3 replaced with the food-delivery informational context
+// (food_informational) and the global guidelines reworded to match; exported sessions with
+// prompt_version '2.0' ran against the previous booking-inquiry control context.
+export const PROMPT_VERSION = '2.1';
 
 export const SURVEY_QUESTION_COUNT = 16;
 export const SURVEY_QUESTION_IDS: readonly string[] = Array.from(

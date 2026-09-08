@@ -1,7 +1,7 @@
 import { Pool } from 'pg';
 import pool, { closePool } from '../config/database';
 import { seedAgentConditions } from './agent_conditions.seed';
-import { HOTEL_CONTEXT_PLACEHOLDER_NOTE, seedContexts } from './contexts.seed';
+import { INFORMATIONAL_CONTEXT_PLACEHOLDER_NOTE, seedContexts } from './contexts.seed';
 import { seedSurveyQuestions } from './survey_questions.seed';
 import { seedGuardrails } from './guardrails.seed';
 
@@ -14,7 +14,7 @@ export async function runSeeds(
 ): Promise<void> {
   log('  > agent_conditions');
   await seedAgentConditions(db);
-  log(`  > contexts (${HOTEL_CONTEXT_PLACEHOLDER_NOTE})`);
+  log(`  > contexts (${INFORMATIONAL_CONTEXT_PLACEHOLDER_NOTE})`);
   await seedContexts(db);
   log('  > survey_questions');
   await seedSurveyQuestions(db);

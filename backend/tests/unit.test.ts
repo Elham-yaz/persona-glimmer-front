@@ -8,7 +8,7 @@ import { chooseBalancedCell, chooseRandomCell } from '../src/services/assignment
 import { parseDatabaseTarget } from '../src/migrations/reset-database';
 import { generateCompletionCode } from '../src/utils/completionCode';
 import { agentConditions, SHARED_SYSTEM_PROMPT_TEMPLATE } from '../src/seeds/agent_conditions.seed';
-import { contexts, HOTEL_CONTEXT_PLACEHOLDER_NOTE } from '../src/seeds/contexts.seed';
+import { contexts, INFORMATIONAL_CONTEXT_PLACEHOLDER_NOTE } from '../src/seeds/contexts.seed';
 import { surveyQuestions } from '../src/seeds/survey_questions.seed';
 
 // Fake OpenAI SDK so the non-mock code path can be exercised without network access.
@@ -228,32 +228,51 @@ describe('small utilities', () => {
     expect(() => parseDatabaseTarget('postgresql://localhost:5432/')).toThrow();
   });
 
-  it('hotel context is marked as a placeholder in code only, never in prompt- or participant-visible text', () => {
-    const hotel = contexts.find((c) => c.code === 'hotel_informational')!;
-    expect(HOTEL_CONTEXT_PLACEHOLDER_NOTE).toMatch(/^PLACEHOLDER — replace with the team's document/);
+  it('informational context is a placeholder in code only, and its policy is purely factual', () => {
+    const info = contexts.find((c) => c.code === 'food_informational')!;
+    expect(INFORMATIONAL_CONTEXT_PLACEHOLDER_NOTE).toMatch(/^PLACEHOLDER — replace with the team's document/);
 
     // agent_policy is pasted verbatim into the system prompt and participant_scenario is shown
     // to the participant: neither may tell the model (or the participant) that the material
     // is a placeholder, or the agent can break role and reveal the study artifice.
     const meta = /placeholder|fabricated|fictional|pilot test/i;
-    expect(hotel.agent_policy).not.toMatch(meta);
-    expect(hotel.participant_scenario).not.toMatch(meta);
-    expect(hotel.title).not.toMatch(meta);
-    expect(hotel.agent_policy.startsWith('HARBORVIEW GRAND HOTEL')).toBe(true);
-    expect(hotel.agent_policy).toContain('Harborview Grand Hotel');
-    expect(hotel.agent_policy).toMatch(/Guest first name: \w+\n/);
-    expect(hotel.scenario_type).toBe('informational');
-    expect(hotel.participant_scenario).toMatch(/^You /);
+    expect(info.agent_policy).not.toMatch(meta);
+    expect(info.participant_scenario).not.toMatch(meta);
+    expect(info.title).not.toMatch(meta);
 
-    const hotelContext = { ...hotel, created_at: new Date(), updated_at: new Date() };
+    // Reference-document shape, anchored on the order number — never on a customer name.
+    expect(info.agent_policy.startsWith('FOOD DELIVERY SUPPORT — ORDER INFORMATION REFERENCE')).toBe(true);
+    expect(info.agent_policy).toContain('FD-83921');
+    expect(info.participant_scenario).toContain('FD-83921');
+    expect(info.agent_policy).not.toMatch(/\bname\b/i);
+    expect(info.scenario_type).toBe('informational');
+    expect(info.participant_scenario).toMatch(/^You /);
+
+    // The control context has no service failure, and the EI manipulation lives ONLY in the
+    // condition guidance blocks: the policy must carry no emotional-support directives and no
+    // complaint-remediation vocabulary.
+    expect(info.agent_policy).not.toMatch(/acknowledge|validate|empathi|reassur|apolog|refund|credit/i);
+
+    // Times of day and relative times only — no weekdays or absolute calendar dates
+    // (the earlier control-context placeholder shipped with wrong weekdays).
+    const weekday = /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i;
+    const month = /\b(january|february|march|april|june|july|august|september|october|november|december)\b/i; // 'may' omitted: modal verb
+    const year = /\b\d{4}\b/;
+    for (const text of [info.agent_policy, info.participant_scenario]) {
+      expect(text).not.toMatch(weekday);
+      expect(text).not.toMatch(month);
+      expect(text).not.toMatch(year);
+    }
+
+    const infoContext = { ...info, created_at: new Date(), updated_at: new Date() };
     for (const c of agentConditions) {
       const prompt = AgentService.buildSystemPrompt(
         condition(c.emotional_intelligence, c.cognitive_intelligence),
-        hotelContext,
+        infoContext,
         guardrails
       );
       expect(prompt).not.toMatch(meta);
-      expect(prompt).toContain('## Reference Information\nHARBORVIEW GRAND HOTEL');
+      expect(prompt).toContain('## Reference Information\nFOOD DELIVERY SUPPORT — ORDER INFORMATION REFERENCE');
     }
   });
 
@@ -277,7 +296,7 @@ describe('small utilities', () => {
     expect(contexts.map((c) => [c.id, c.code])).toEqual([
       [1, 'food_utilitarian'],
       [2, 'food_hedonic'],
-      [3, 'hotel_informational'],
+      [3, 'food_informational'],
     ]);
     expect(sha(snapshot(1))).toBe('4a3120270e89aec49425adc9fd7af3ffff2dfccb9a3b44e82ae1ffd9046a4df7');
     expect(sha(snapshot(2))).toBe('d5661b19582d52bc8ab453bae8c2c92b15d35c2b8df65ce8b8fb1bbe835b484e');
