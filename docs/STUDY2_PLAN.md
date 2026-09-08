@@ -1,6 +1,6 @@
 # Study 2 Platform Redesign — Implementation Plan
 
-**Status:** APPROVED 2026-09-06 (see §0) — implementation in progress on branch `study2/single-session` · **Date:** 2026-08-30 · **Rollback anchor:** tag `snapshot-2026-08-30` / branch `snapshot/main-2026-08-30-pre-deep-changes` on both repos
+**Status:** IMPLEMENTED 2026-09-07 on branch `study2/single-session` (commits `59de1e8`, `a140d76`; audited — see [STUDY2_AUDIT_2026-09-07.md](./STUDY2_AUDIT_2026-09-07.md)). Decisions in §0; dated amendments mark where implementation diverged from the original plan text below. The contract [STUDY2_API.md](./STUDY2_API.md) and [ARCHITECTURE.md](./ARCHITECTURE.md) describe the as-built system · **Date:** 2026-08-30 · **Rollback anchor:** tag `snapshot-2026-08-30` / branch `snapshot/main-2026-08-30-pre-deep-changes` on both repos
 
 This plan turns the current 20-topic, login-based, twice-weekly platform into a **single anonymous session**: land from Qualtrics → random assignment (4 agents × 3 contexts) → 10 interactions → 16 post-chat questions → 5-digit completion code → back to Qualtrics. Qualtrics itself is out of scope; only the hand-offs (inbound link, outbound code) are covered.
 
@@ -44,7 +44,7 @@ Each item: **Decision → Recommendation → Why.** Items marked ❓ need resear
 
 **D1 — Session identity without login.** On landing, the frontend calls `POST /api/sessions`; the backend creates a session row (UUID v4) with the random assignment and returns the id. The frontend keeps it in `localStorage` and sends it as `Authorization: Bearer <sessionId>` on every call. → *A 122-bit random UUID is an unguessable bearer credential; no JWT machinery needed.* Refresh/cold-start resumes the same session. ❓ Revisit behavior: a browser holding a **completed** session should see its completion code again (never a new session); an **incomplete** one resumes. A new session only starts if storage is cleared — this also weakly discourages repeat participation.
 
-**D2 — Data model: new v2 tables in the same database; Study-1 tables frozen.** Add `agent_conditions`, `contexts`, `sessions`, `session_messages`, `session_survey_responses`. Do **not** modify or drop `users`, `messages`, `topics`, `agents`, `user_topic_interactions`, `*_survey_responses`, `password_reset_tokens` — they stay as the Study-1 archive (also fully exported to `data_folder_private/export_2026-08-30/`). Reuse `global_guardrails` (config, not participant data). → *No new infrastructure, Study 1 stays queryable, and every change is purely additive (trivially reversible). The old tables' `CHECK` constraints (agents 1–9, topics 1–20, numeric EQ/CQ) make reuse messier than fresh tables.* Alternative: a second Render Postgres for total isolation — cleaner but costs another instance; not recommended unless the team wants Study 2 fully separate.
+**D2 — Data model** *(superseded 2026-09-06 by the §0 decision: **clean slate** — the database is wiped and recreated with a fresh v2 schema, migrations `001–008` and a tracked runner; Study-1 survives as the export + `snapshot-2026-08-30` tag. The original recommendation below is kept for the record.)* Original: new v2 tables in the same database; Study-1 tables frozen. Add `agent_conditions`, `contexts`, `sessions`, `session_messages`, `session_survey_responses`. Do **not** modify or drop `users`, `messages`, `topics`, `agents`, `user_topic_interactions`, `*_survey_responses`, `password_reset_tokens` — they stay as the Study-1 archive (also fully exported to `data_folder_private/export_2026-08-30/`). Reuse `global_guardrails` (config, not participant data). → *No new infrastructure, Study 1 stays queryable, and every change is purely additive (trivially reversible). The old tables' `CHECK` constraints (agents 1–9, topics 1–20, numeric EQ/CQ) make reuse messier than fresh tables.* Alternative: a second Render Postgres for total isolation — cleaner but costs another instance; not recommended unless the team wants Study 2 fully separate.
 
 **D3 — Random assignment.** Uniform random over the 12 cells (4 × 3) per the spec. ❓ Option: **balanced randomization** (pick uniformly among the currently least-filled cells) guarantees even cells at any N; pure random can drift (e.g., 25 vs 45 at N≈400). Recommend offering a config flag, default per the team's preference.
 
@@ -66,7 +66,7 @@ Each item: **Decision → Recommendation → Why.** Items marked ❓ need resear
 
 ---
 
-## 3. Data model (v2 tables — additive migration `013_create_study2_tables.sql`)
+## 3. Data model (v2 tables) *(amended 2026-09-06: shipped as fresh migrations `001–008` on a wiped database — not an additive `013` — per the §0 clean-slate decision; authoritative DDL in `backend/src/migrations/`)*
 
 ```sql
 agent_conditions
@@ -126,7 +126,7 @@ Indexes: `sessions(created_at)`, `sessions(agent_condition_id, context_id)`, `se
 - `controllers/session.controller.ts` + `routes/session.routes.ts`
 - `middleware/session.middleware.ts` — resolves `Authorization: Bearer <uuid>` → `req.session` (404/401 if unknown)
 - `controllers/admin.controller.ts` — v2 endpoints (sessions, messages, surveys, cell-distribution dashboard, **server-side CSV export**)
-- `migrations/013_create_study2_tables.sql` (+ add to the runner array); `seeds/agent_conditions.seed.ts`, `seeds/contexts.seed.ts`, `seeds/survey_questions.seed.ts`
+- fresh migrations `001–008` with a tracked `schema_migrations` runner and a `CONFIRM_RESET`-guarded reset script *(amended per §0 clean slate; replaces the planned additive `013`)*; `seeds/agent_conditions.seed.ts`, `seeds/contexts.seed.ts`, `seeds/survey_questions.seed.ts`
 - `utils/completionCode.ts` (generate + collision retry)
 
 **Modify**
@@ -175,7 +175,7 @@ Invariants enforced server-side: one context per session; max 10 interactions; s
 
 ## 6. Content needed from the research team (blocking for seeding)
 
-1. **Control (informational) context:** the reference document (delivery timing, ingredients/allergens, packaging/presentation, the delivery process — PDF/DOCX/TXT, we convert to text); the fictional order record the agent "knows"; the participant scenario text ("You just placed an order at … and want to know …"); the agent opening line.
+1. **Control (informational) context:** the reference document (delivery timing, ingredients/allergens, packaging/presentation, the delivery process — PDF/DOCX/TXT, we convert to text); the fictional order record the agent "knows"; the participant scenario text ("You just placed an order at … and want to know …"). (No separate agent opening line exists — per D4 the scenario itself is the auto-sent first message.)
 2. **Food-delivery contexts:** confirm reuse of topics 1–2 verbatim (`Missing Food Item` utilitarian; `Messy Food Presentation` hedonic), or supply edits.
 3. **Four agent prompts:** confirm the shared base persona + existing EI/CI `low`/`high` guidance blocks are the intended manipulation, or supply wording.
 4. **Post-chat items:** confirm all 16 verbatim. ⚠️ At least `post-6` ("The agent resolved my issue to my satisfaction") presupposes a service issue — decide whether it stays for the informational context, is reworded, or is context-conditional.
@@ -191,7 +191,7 @@ Shipped: admin key rotation + server-side verification. Carry into this rewrite:
 
 ---
 
-## 8. Testing & verification (the platform currently has zero real tests)
+## 8. Testing & verification (the v1 platform had zero real tests; as built, v2 ships 79 backend + 31 frontend tests)
 
 - **Backend integration tests** (vitest + supertest, OpenAI mocked) for the session lifecycle: create → 10 messages → 11th rejected → survey wrong count rejected → survey ok → code unique & idempotent → resume returns same state; replayed `clientMessageId` doesn't duplicate; concurrent messages don't overshoot 10.
 - **Frontend**: build + type-check; manual run of every screen in all 12 cells (a `?force=agent,context` dev-only override makes this feasible).
@@ -202,8 +202,10 @@ Shipped: admin key rotation + server-side verification. Carry into this rewrite:
 
 ## 9. Deployment & rollback
 
-1. Work on branch `study2/single-session` (off `main`). 2. Run migration 013 against production **first** — purely additive, old code ignores the new tables (safe). 3. Seed conditions/contexts/questions. 4. Merge → push backend to `Elham-yaz/main` (Render auto-deploys) and frontend to `surjray/main` (Netlify) — or consolidate per D10. 5. Smoke test. 6. Pilot.
-**Rollback:** push `snapshot-2026-08-30` back onto each `main`; the v2 tables can be left in place or dropped — Study-1 data is never touched.
+*(rewritten 2026-09-07 to match the clean-slate decision; the original additive-migration sequence no longer applies)*
+
+1. Pre-push: redact/rotate the archived Study-1 credentials (audit F1) and set `DATABASE_SSL_NO_VERIFY=true` on the Render service while the old code is still live. 2. Fast-forward `main` to the branch; push backend to `Elham-yaz/main` (Render auto-deploys) and frontend to `surjray/main` (Netlify). 3. When the backend is live, run the one-off job from the service environment: `CONFIRM_RESET=research_chat_platform npm run db:reset && npm run migrate && npm run seed` — **this irreversibly wipes the Study-1 tables** (preserved offline in `data_folder_private/export_2026-08-30/` and at tag `snapshot-2026-08-30`) and creates + seeds the v2 schema. Migrations run via `tsx` from `src/` (compiled `dist/` carries no `.sql`). 4. Smoke test with a full real session (10 interactions → survey → code), not just `/health`. 5. Pilot 12–24 sessions across all 12 cells before distributing the Qualtrics link.
+**Rollback is code-only:** push `snapshot-2026-08-30` back onto each `main`. The database cannot be rolled back — after the reset, Study-1 data exists only as the offline export; restoring it would be a manual re-import from those files.
 
 ---
 
@@ -222,7 +224,7 @@ Phases 1 and 2 can proceed in parallel once the API contract (§4) is agreed; Ph
 
 ---
 
-## 11. Open questions checklist (need answers before Phase 3; defaults in **bold**)
+## 11. Open questions checklist *(historical — answers are recorded in §0 and implemented; still genuinely open as of 2026-09-07: item 9 (post-6/post-10 wording in the informational context), the hedonic-context EI bullets (audit F2), and shared-device/rid behavior (audit F4))*
 
 1. Revisit behavior: **resume incomplete / re-show code for completed**; new session only if storage cleared? (D1)
 2. Assignment: **pure random** or balanced-least-filled? (D3)
