@@ -138,7 +138,7 @@ If you want to see the raw database:
    - Port: `5432`
    - Database: `paid_db_9iwk`
    - Username: `paid_db_9iwk_user`
-   - Password: `MQyXT14DYC3qe1uqjoKzvYob3pUITGlP`
+   - Password: `REDACTED-ROTATED`
    - SSL: Required
 
 ---

@@ -17,9 +17,9 @@ After deploying to Netlify, users can't sign up or login because the frontend is
 
 3. **Set Environment Variables in Render:**
    ```
-   DATABASE_URL=postgresql://paid_db_9iwk_user:MQyXT14DYC3qe1uqjoKzvYob3pUITGlP@dpg-d5erpafpm1nc73fuscug-a.oregon-postgres.render.com:5432/paid_db_9iwk?sslmode=require
+   DATABASE_URL=postgresql://paid_db_9iwk_user:REDACTED-ROTATED@dpg-d5erpafpm1nc73fuscug-a.oregon-postgres.render.com:5432/paid_db_9iwk?sslmode=require
    OPENAI_API_KEY=sk-proj-YOUR_OPENAI_API_KEY_HERE
-   JWT_SECRET=7d9a63242bf1fcfe6e2511d7c151c8e561c81bd019c8b820c8ffceb45f400400
+   JWT_SECRET=REDACTED-ROTATED
    NODE_ENV=production
    PORT=3000
    FRONTEND_URL=https://your-netlify-site.netlify.app

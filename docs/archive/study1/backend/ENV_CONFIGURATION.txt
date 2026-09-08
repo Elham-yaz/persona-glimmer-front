@@ -3,7 +3,7 @@ ENVIRONMENT CONFIGURATION GUIDE
 ===========================================
 
 Your generated JWT Secret:
-7d9a63242bf1fcfe6e2511d7c151c8e561c81bd019c8b820c8ffceb45f400400
+REDACTED-ROTATED
 
 ===========================================
 UPDATE YOUR .env FILE WITH THESE VALUES:
@@ -28,7 +28,7 @@ UPDATE YOUR .env FILE WITH THESE VALUES:
 
 3. JWT_SECRET
    Use this generated value:
-   JWT_SECRET=7d9a63242bf1fcfe6e2511d7c151c8e561c81bd019c8b820c8ffceb45f400400
+   JWT_SECRET=REDACTED-ROTATED
 
 4. FRONTEND_URL
    Default (usually correct):
