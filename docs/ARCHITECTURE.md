@@ -73,7 +73,8 @@ completion code** to type back into Qualtrics. There are no accounts, no login a
 | 3 | `loEI_hiCI` | low | high |
 | 4 | `loEI_loCI` | low | low |
 
-All four share **one neutral display name** (`Alex`) and **one context-agnostic base persona**
+All four share **one display name** (`AI agent` -- the agent has no human name, per the 2026-09-14
+amendment) and **one context-agnostic base persona**
 (`SHARED_SYSTEM_PROMPT_TEMPLATE`, which deliberately contains no EI/CI wording). The manipulation lives
 **only** in the EI and CI guidance blocks that the prompt builder appends (section 9). A unit test
 guards this.
@@ -88,20 +89,29 @@ guards this.
 
 Each context has a `participant_scenario` (second person; shown in the scenario panel **and**
 auto-sent as the participant's first message) and a hidden `agent_policy` (reference material injected
-into the agent's prompt, never sent to the participant). Verbatim fidelity of contexts 1-2 and of the 16
-survey items to the v1 baseline is asserted by SHA-256 hashes in `backend/tests/unit.test.ts`.
+into the agent's prompt, never sent to the participant). Verbatim fidelity of contexts 1-2 to the v1
+baseline is asserted by SHA-256 hashes in `backend/tests/unit.test.ts` (the survey items are no longer
+the v1 set -- see below).
 
 **Assignment** (`ASSIGNMENT_MODE`): `random` (default) draws uniformly over the 12 cells;
 `balanced` draws uniformly among the cells with the fewest *started* sessions, serialised with a
 Postgres advisory lock so concurrent arrivals cannot pile into one cell.
 
 **Survey items** are frozen in two places that must agree: the database table `survey_questions`
-(text, category, position, `version = '1.0'`) and the frontend bank `src/data/surveyQuestions.ts`.
-The database stores `(question_id, response_value)` per session; the item text is in the DB, so exports
-can be joined without the frontend source.
+(text, category, position, `version = '2.0'`) and the frontend bank `src/data/surveyQuestions.ts`.
+Version 2.0 is the instrument the researchers supplied on 2026-09-14: two satisfaction items, one
+compliance-intention item, one AI-preference item, five perceived-emotional-intelligence items, five
+perceived-cognitive-intelligence items, one realism item and one engagement item, in that mandated
+order under a single instruction sentence ("Please indicate the extent to which you agree with the
+following statements about the AI agent you interacted with during the service recovery."). `category`
+is analysis metadata only and is never rendered -- an EI/CI-labelled heading would prime participants.
+Sessions stamped `prompt_version = '2.1'` (created before 2026-09-14) answered the previous
+version-1.0 items under the same ids. The database stores `(question_id, response_value)` per session;
+the item text is in the DB, so exports can be joined without the frontend source.
 
 **Reproducibility stamps:** every session records the `model` name it was created under (the
-configured `OPENAI_MODEL`, or `mock`) and `prompt_version` (`2.1`, a constant in `config/study.ts`).
+configured `OPENAI_MODEL`, or `mock`) and `prompt_version` (`2.2` since 2026-09-14, `2.1` before; a
+constant in `config/study.ts`).
 
 ## 3. System architecture
 
@@ -380,8 +390,8 @@ Migration 008 adds `updated_at` triggers to `agent_conditions`, `contexts`, `ses
 
 **Seeds** (`npm run seed`, `seeds/run-seeds.ts`) are idempotent upserts, in order: the 4 agent
 conditions, the 3 contexts (the runner prints the context-3 placeholder note), the 16 survey questions
-(`version '1.0'`, positions 1-16), the guardrails singleton (8 context-neutral rules). Re-run after
-editing any seed file.
+(`version '2.0'`, positions 1-16), the guardrails singleton (8 context-neutral rules). Re-run after
+editing any seed file; the deploy itself never runs them (ordering caveat in section 11).
 
 ## 8. Key flows
 
@@ -398,7 +408,7 @@ GET  /me at any time      -> the same state; the frontend resumes from it
 <= 100 chars; `force.agentConditionId` 1-4, `force.contextId` 1-3). `AssignmentService.createAssignedSession`
 picks the cell (section 2; `force` honoured only when `ALLOW_FORCED_ASSIGNMENT=true`, otherwise
 silently ignored, though a malformed `force` is still a `400`) and inserts the row stamped with
-`model = OpenAIService.getModelName()` and `prompt_version = '2.1'`. Response `201` with the public
+`model = OpenAIService.getModelName()` and `prompt_version = '2.2'`. Response `201` with the public
 state: `sessionId`, `agent: { displayName }`, `context: { id, code, title, scenarioType,
 participantScenario }`, `openingMessage`, `maxInteractions: 10`, counters, `completionCode: null`,
 `messages: []`. Nothing about the condition leaks (an integration test asserts the absence of
@@ -494,8 +504,10 @@ exists and inserts directly. The admin dashboard reports the active mode.
 **Prompt assembly** (`AgentService.buildSystemPrompt(condition, context, guardrails)` in
 `backend/src/services/agent.service.ts`), concatenated in exactly this order:
 
-1. `condition.system_prompt_template` -- the shared base persona ("You are Alex, a customer support
-   agent for the company the customer is contacting ...").
+1. `condition.system_prompt_template` -- the shared base persona ("You are an AI customer support
+   agent for the company the customer is contacting ..."). It assigns no name: the model speaks in the
+   first person and may call itself the AI support agent, but never adopts a human name (amended
+   2026-09-14).
 2. `## Your Intelligence Profile` -- the sentence "You have {low|high} emotional intelligence and
    {low|high} cognitive intelligence.", then the **EI guidance block** for the condition's level
    (`**Emotional Intelligence: Low**` = direct, factual, efficient, less warm; `High` = warm, empathetic,
@@ -553,7 +565,7 @@ call time so tests can toggle them):
 | `NODE_ENV` | no | `production` enables SSL + hides error detail; `development` logs queries and validates the OpenAI key at startup; `test` is set by the test harness |
 
 `JWT_SECRET` is **no longer used**. Constants that are not configurable live in
-`backend/src/config/study.ts`: `MAX_INTERACTIONS = 10`, `PROMPT_VERSION = '2.1'`, the 16 question ids,
+`backend/src/config/study.ts`: `MAX_INTERACTIONS = 10`, `PROMPT_VERSION = '2.2'`, the 16 question ids,
 the 1-7 range, the 10000-99999 code range and 20 collision attempts, the default model. The frontend
 never hardcodes these; it reads `maxInteractions` from API responses.
 
@@ -584,7 +596,14 @@ as secrets in the Render dashboard. Free-tier cold starts (30-60 s) are why the 
 
 **Database provisioning is a manual CLI step** and never part of the build: after a deploy against a
 fresh database, run `npm run migrate` and `npm run seed` in the service's **Shell** tab (or a one-off
-job), or locally against the *external* connection string. `npm run db:reset` on production likewise
+job), or locally against the *external* connection string. Because `npm start` is `node dist/server.js`
+and `render.yaml` has no seed step, a code change and its seed change go live at different moments:
+`prompt_version` is a code constant stamped at session creation, whereas `display_name`,
+`system_prompt_template` and the survey item text are read from the seeded tables. Pause data
+collection across a deploy + re-seed and exclude sessions created in the gap -- for the 2026-09-14
+amendment, a session created after the backend deploy but before `npm run seed` is stamped `2.2` yet
+chatted with the old named agent (the reverse order stamps `2.1` on sessions that saw the new one).
+`npm run db:reset` on production likewise
 runs only from a shell with `CONFIRM_RESET=<database name>`; there is no HTTP endpoint for any of
 these. The scripts run through `tsx` from `src/` because `tsc` does not copy `.sql` files into `dist/`.
 
@@ -635,7 +654,7 @@ requests).
 | `assignment.test.ts` | 12 cells exposed; random picks valid cells; balanced always fills a least-populated cell, also under 12 concurrent creations; `force` honoured only with the flag; malformed `force` -> `400` |
 | `migrations.test.ts` | Exactly the eight v2 files in order; idempotent runner; only v2 tables exist; `updated_at` trigger; the reset CLI refuses without the exact `CONFIRM_RESET`, resets with it, exits 1 on failure |
 | `rate-limit-config.test.ts` | `DEFAULT_SESSION_CREATE_LIMIT_PER_HOUR = 60` and `DEFAULT_MESSAGE_LIMIT_PER_MINUTE = 30`; positive-integer env overrides honoured; malformed values (`0`, `-3`, `abc`, empty, `1.5x`) fall back to the defaults |
-| `unit.test.ts` | Prompt section order and per-condition guidance; shared template has no EI/CI wording; message list shape; mock and real OpenAI paths (empty completion -> `AGENT_UNAVAILABLE`, no output filter, `timeout 30000 / maxRetries 0`); assignment helpers; CSV field rules; code range; `DATABASE_URL` parsing; context-3 placeholder hygiene; SHA-256 fidelity of contexts 1-2 and the 16 items to the v1 baseline |
+| `unit.test.ts` | Prompt section order and per-condition guidance; shared template has no EI/CI wording; message list shape; mock and real OpenAI paths (empty completion -> `AGENT_UNAVAILABLE`, no output filter, `timeout 30000 / maxRetries 0`); assignment helpers; CSV field rules; code range; `DATABASE_URL` parsing; context-3 placeholder hygiene; SHA-256 fidelity of contexts 1-2 to the v1 baseline; survey seed content (the 2026-09-14 instrument, version 2.0) |
 
 **Frontend** (`src/test/`, Vitest + jsdom + Testing Library, `npm test` at the repo root):
 `study.test.tsx` (landing -> Begin -> opening auto-sent exactly once; `rid`/`force` forwarded; resume
@@ -671,11 +690,13 @@ to participants, so displayed-vs-enforced drift cannot occur); and the platform 
    record, ingredient/allergen and packaging details, delivery-process reference document, scenario)
    is fabricated for development and pilots. Replace it with the team's material (one file edit, then
    `npm run seed`) before real data collection in that context.
-2. **`post-6` wording for the informational context.** "The agent resolved my issue to my
-   satisfaction." presupposes a service problem, which the informational inquiry does not have. The item is
-   currently asked verbatim in all three contexts; the team must decide whether to keep, reword or make
-   it context-conditional (changing it means editing `survey_questions.seed.ts`, `src/data/surveyQuestions.ts`
-   and the fidelity hash in `unit.test.ts`).
+2. **Instrument wording in the informational context.** The post-chat instrument the researchers
+   supplied on 2026-09-14 (version 2.0; it replaced the Study-1 items and with them the earlier
+   `post-6` concern) is asked verbatim in all three contexts. Its instruction sentence ("... during the
+   service recovery") and several items (`post-1`, `post-2`, `post-5`, `post-10`, `post-11`) presuppose
+   a service problem, which the informational inquiry does not have. Any rewording is the team's call
+   and means editing `survey_questions.seed.ts`, `src/data/surveyQuestions.ts` and the seed checks in
+   `unit.test.ts`.
 3. **No email or PII, by design.** Participants cannot be contacted or de-duplicated by the platform;
    the only identifiers are the completion code and the optional `external_id`. Repeat participation is
    only weakly discouraged (a browser with a completed session in `localStorage` is shown its code again
@@ -717,7 +738,7 @@ to participants, so displayed-vs-enforced drift cannot occur); and the platform 
 | Change the prompt structure | `AgentService.buildSystemPrompt`; update the order test in `tests/unit.test.ts` and bump `PROMPT_VERSION` in `config/study.ts` |
 | Change the model or generation parameters | `OPENAI_MODEL` env var; temperature/max_tokens/penalties in `services/openai.service.ts`; timeout in `config/openai.ts` |
 | Change the 10-interaction cap | `MAX_INTERACTIONS` in `backend/src/config/study.ts` **and** the `CHECK (interaction_count BETWEEN 0 AND 10)` in `003_create_sessions.sql` (new migration). The frontend reads the value from the API |
-| Edit survey items | `backend/src/seeds/survey_questions.seed.ts` (bump `SURVEY_VERSION`), `src/data/surveyQuestions.ts`, the count/ids in `config/study.ts` if the number changes, and the fidelity hash in `unit.test.ts` |
+| Edit survey items | `backend/src/seeds/survey_questions.seed.ts` (bump `SURVEY_VERSION`), `src/data/surveyQuestions.ts`, the count/ids in `config/study.ts` if the number changes, and the seed checks in `unit.test.ts` |
 | Edit the guardrails | `backend/src/seeds/guardrails.seed.ts`, then `npm run seed` (single source; nothing is shown to participants) |
 | Assignment behaviour | `ASSIGNMENT_MODE` env; algorithms in `services/assignment.service.ts` |
 | Rate limits | `SESSION_CREATE_LIMIT_PER_HOUR`, `MESSAGE_LIMIT_PER_MINUTE` env (defaults in `config/study.ts`); admin limit in `routes/admin.routes.ts` |

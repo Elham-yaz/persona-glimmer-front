@@ -39,9 +39,8 @@ export function LikertScale({ value, onChange, showLabels = true }: LikertScaleP
       </div>
       {showLabels && (
         <div className="flex justify-between text-xs text-muted-foreground">
-          <span>Strongly Disagree</span>
-          <span>Neutral</span>
-          <span>Strongly Agree</span>
+          <span>Strongly disagree</span>
+          <span>Strongly agree</span>
         </div>
       )}
     </div>

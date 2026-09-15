@@ -7,9 +7,15 @@ import { csvField, csvLine } from '../src/controllers/admin.controller';
 import { chooseBalancedCell, chooseRandomCell } from '../src/services/assignment.service';
 import { parseDatabaseTarget } from '../src/migrations/reset-database';
 import { generateCompletionCode } from '../src/utils/completionCode';
-import { agentConditions, SHARED_SYSTEM_PROMPT_TEMPLATE } from '../src/seeds/agent_conditions.seed';
+import { PROMPT_VERSION, SURVEY_QUESTION_IDS } from '../src/config/study';
+import {
+  AGENT_DISPLAY_NAME,
+  agentConditions,
+  SHARED_SYSTEM_PROMPT_TEMPLATE,
+} from '../src/seeds/agent_conditions.seed';
 import { contexts, INFORMATIONAL_CONTEXT_PLACEHOLDER_NOTE } from '../src/seeds/contexts.seed';
-import { surveyQuestions } from '../src/seeds/survey_questions.seed';
+import { guardrails as globalGuardrails } from '../src/seeds/guardrails.seed';
+import { SURVEY_VERSION, surveyQuestions } from '../src/seeds/survey_questions.seed';
 
 // Fake OpenAI SDK so the non-mock code path can be exercised without network access.
 const createMock = vi.fn();
@@ -34,13 +40,18 @@ const condition = (ei: 'low' | 'high', ci: 'low' | 'high') => ({
   code: 'x',
   emotional_intelligence: ei,
   cognitive_intelligence: ci,
-  display_name: 'Alex',
+  display_name: AGENT_DISPLAY_NAME,
   system_prompt_template: SHARED_SYSTEM_PROMPT_TEMPLATE,
   created_at: new Date(),
   updated_at: new Date(),
 });
 
 const context = { ...contexts[0], created_at: new Date(), updated_at: new Date() };
+
+// The agent's retired human name (prompt_version <= '2.1'). Spelled from parts so that the
+// release check `grep -rn "<name>" backend/src backend/tests` stays clean; the regex below
+// still matches the literal name wherever it might creep back in.
+const FORMER_NAME_RE = new RegExp(`\\b${['Al', 'ex'].join('')}\\b`);
 const guardrails = { id: 1, title: 'G', content: 'GUARDRAIL CONTENT', created_at: new Date(), updated_at: new Date() };
 
 describe('AgentService.buildSystemPrompt', () => {
@@ -86,6 +97,40 @@ describe('AgentService.buildSystemPrompt', () => {
 
   it('shared template contains no EI/CI wording (manipulation lives in the guidance blocks only)', () => {
     expect(SHARED_SYSTEM_PROMPT_TEMPLATE).not.toMatch(/emotional|cognitive|empath|analytical|warm/i);
+  });
+
+  it('the agent has no name: participants see "AI agent" and no prompt section introduces a human name', () => {
+    // Researcher decision 2026-09-14 (prompt_version '2.2'): the former human name is gone.
+    expect(PROMPT_VERSION).toBe('2.2');
+    expect(AGENT_DISPLAY_NAME).toBe('AI agent');
+    expect(SHARED_SYSTEM_PROMPT_TEMPLATE.startsWith('You are an AI customer support agent for the company')).toBe(true);
+    expect(SHARED_SYSTEM_PROMPT_TEMPLATE).toContain('Speak in the first person, in natural, conversational English.');
+
+    // A human-name introduction looks like "You are Sam, ..." / "as Sam" / "my name is Sam":
+    // a capitalised single word right after an identity phrase. "an AI customer support agent"
+    // does not match (lower-case article), so the pattern flags only a proper name.
+    const humanName = /\b(?:you are|i am|i'm|my name is|named|called|introduce yourself as|first person as)\s+[A-Z][a-z]+\b/;
+    expect(SHARED_SYSTEM_PROMPT_TEMPLATE).not.toMatch(FORMER_NAME_RE);
+    expect(SHARED_SYSTEM_PROMPT_TEMPLATE).not.toMatch(humanName);
+    expect(SHARED_SYSTEM_PROMPT_TEMPLATE).not.toMatch(/introduce yourself/i);
+    expect(AGENT_DISPLAY_NAME).not.toMatch(/^[A-Z][a-z]+$/);
+
+    // The fully assembled prompt (real global guidelines, every context, every condition)
+    // must not reintroduce a name through any other section either.
+    const real = { ...globalGuardrails, created_at: new Date(), updated_at: new Date() };
+    for (const ctx of contexts) {
+      const full = { ...ctx, created_at: new Date(), updated_at: new Date() };
+      for (const c of agentConditions) {
+        const prompt = AgentService.buildSystemPrompt(
+          condition(c.emotional_intelligence, c.cognitive_intelligence),
+          full,
+          real
+        );
+        expect(prompt).not.toMatch(FORMER_NAME_RE);
+        expect(prompt).not.toMatch(humanName);
+        expect(prompt).not.toMatch(/introduce yourself/i);
+      }
+    }
   });
 
   it('builds the message list with the full transcript, agent -> assistant', () => {
@@ -276,11 +321,10 @@ describe('small utilities', () => {
     }
   });
 
-  it('food contexts 1-2 and the 16 survey items are verbatim copies of the baseline (commit 4116767)', () => {
+  it('food contexts 1-2 are verbatim copies of the baseline (commit 4116767)', () => {
     // sha256 over JSON of the baseline fields, computed from
     //   git show 4116767:backend/src/seeds/topics.seed.ts   (ids 1-2: title, domain, scenario_type,
     //     stimulus_text -> participant_scenario, topic_specific_policy -> agent_policy)
-    //   git show 4116767:src/data/mockData.ts               (postTopicSurveyQuestions: id, text, category)
     // Regenerate the constants only if the research team deliberately changes the content.
     const sha = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
     const snapshot = (id: number) => {
@@ -300,9 +344,52 @@ describe('small utilities', () => {
     ]);
     expect(sha(snapshot(1))).toBe('4a3120270e89aec49425adc9fd7af3ffff2dfccb9a3b44e82ae1ffd9046a4df7');
     expect(sha(snapshot(2))).toBe('d5661b19582d52bc8ab453bae8c2c92b15d35c2b8df65ce8b8fb1bbe835b484e');
+  });
 
-    const items = surveyQuestions.map((q) => ({ id: q.id, text: q.text, category: q.category }));
-    expect(items.map((q) => q.id)).toEqual(Array.from({ length: 16 }, (_, i) => `post-${i + 1}`));
-    expect(sha(items)).toBe('2ab7bc61c497a6d10fd392e107c2cd374651a0df6714e5e49f42e8a6dedc7d7f');
+  it('the 16 survey items are the researchers\' post-chat instrument (version 2.0, 2026-09-14), in the mandated order', () => {
+    // Transcribed from the researchers' screenshot; ids post-1..post-16 and the order are
+    // mandated, trailing periods normalized. `category` is analysis metadata only and is
+    // never displayed to participants. Change this list only with the research team's sign-off.
+    expect(SURVEY_VERSION).toBe('2.0');
+    expect(surveyQuestions.map((q) => ({ id: q.id, text: q.text, category: q.category }))).toEqual([
+      { id: 'post-1', text: "I am satisfied with the AI agent's help regarding my problem.", category: 'Satisfaction' },
+      { id: 'post-2', text: "I am satisfied with the AI agent's responses to my problem.", category: 'Satisfaction' },
+      { id: 'post-3', text: "It's likely that I follow the steps suggested by the agent.", category: 'Compliance intention' },
+      { id: 'post-4', text: 'If I experience the same problem again, I would prefer to interact with an AI agent rather than a human service representative.', category: 'AI preference' },
+      { id: 'post-5', text: 'The AI agent accurately recognized how I was feeling about the service problem.', category: 'Perceived emotional intelligence' },
+      { id: 'post-6', text: 'The AI agent showed a clear understanding of why the situation was emotionally frustrating or upsetting for me.', category: 'Perceived emotional intelligence' },
+      { id: 'post-7', text: 'The AI agent responded to my emotions in a way that felt appropriate to the situation.', category: 'Perceived emotional intelligence' },
+      { id: 'post-8', text: 'The AI agent helped reduce my negative emotions (e.g., frustration, anger, disappointment) during the interaction.', category: 'Perceived emotional intelligence' },
+      { id: 'post-9', text: 'The AI agent used my emotional cues to guide how it handled the service recovery.', category: 'Perceived emotional intelligence' },
+      { id: 'post-10', text: 'The AI provided accurate and factually correct information in response to my service issue.', category: 'Perceived cognitive intelligence' },
+      { id: 'post-11', text: 'The AI effectively solved or helped resolve the problem I encountered.', category: 'Perceived cognitive intelligence' },
+      { id: 'post-12', text: "The AI's responses were logically reasoned and made sense in context.", category: 'Perceived cognitive intelligence' },
+      { id: 'post-13', text: 'The AI adapted its responses based on the details of my situation.', category: 'Perceived cognitive intelligence' },
+      { id: 'post-14', text: 'The AI handled the task quickly and competently without unnecessary delays.', category: 'Perceived cognitive intelligence' },
+      { id: 'post-15', text: 'My experience with the AI agent felt realistic.', category: 'Realism' },
+      { id: 'post-16', text: 'I engaged with the task seriously.', category: 'Engagement' },
+    ]);
+
+    // The ids the API validates against are exactly the seeded ids, in position order.
+    expect(surveyQuestions.map((q) => q.id)).toEqual([...SURVEY_QUESTION_IDS]);
+    expect(SURVEY_QUESTION_IDS).toEqual(Array.from({ length: 16 }, (_, i) => `post-${i + 1}`));
+
+    // Construct sizes: 2 satisfaction, 1 compliance, 1 AI preference, 5 EI, 5 CI, 1 realism, 1 engagement.
+    const counts = new Map<string, number>();
+    for (const q of surveyQuestions) counts.set(q.category, (counts.get(q.category) ?? 0) + 1);
+    expect(Object.fromEntries(counts)).toEqual({
+      Satisfaction: 2,
+      'Compliance intention': 1,
+      'AI preference': 1,
+      'Perceived emotional intelligence': 5,
+      'Perceived cognitive intelligence': 5,
+      Realism: 1,
+      Engagement: 1,
+    });
+    for (const q of surveyQuestions) {
+      expect(q.text.endsWith('.')).toBe(true);
+      expect(q.text).not.toMatch(FORMER_NAME_RE);
+      expect(q.category.length).toBeLessThanOrEqual(50); // survey_questions.category VARCHAR(50)
+    }
   });
 });

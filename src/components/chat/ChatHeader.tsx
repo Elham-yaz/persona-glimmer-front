@@ -1,7 +1,11 @@
 import { Bot, MessageSquare } from 'lucide-react';
 
 interface ChatHeaderProps {
-  /** `agent.displayName` from the API — the only agent attribute shown. */
+  /**
+   * `agent.displayName` from the API — the only agent attribute shown. Since
+   * 2026-09-14 the API returns "AI agent" (the agent has no name), so the
+   * header reads "AI agent" over the "Customer Service" role line.
+   */
   agentName: string;
   interactionCount: number;
   maxInteractions: number;

@@ -4,10 +4,15 @@
  */
 
 export const MAX_INTERACTIONS = 10;
+// Prompt version trail (stamped on every session so exports can be split by prompt):
+// '2.0' — original Study 2 prompt (agent introduced by a human first name; booking-inquiry
+//   control context).
 // '2.1' (2026-09-07): context 3 replaced with the food-delivery informational context
-// (food_informational) and the global guidelines reworded to match; exported sessions with
-// prompt_version '2.0' ran against the previous booking-inquiry control context.
-export const PROMPT_VERSION = '2.1';
+//   (food_informational) and the global guidelines reworded to match.
+// '2.2' (2026-09-14): the agent is unnamed — display_name and the shared template say
+//   "AI agent" instead of a human first name — and the post-chat survey instrument was replaced
+//   (survey_questions version '2.0'; see seeds/survey_questions.seed.ts).
+export const PROMPT_VERSION = '2.2';
 
 export const SURVEY_QUESTION_COUNT = 16;
 export const SURVEY_QUESTION_IDS: readonly string[] = Array.from(

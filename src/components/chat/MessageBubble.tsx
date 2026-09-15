@@ -29,7 +29,7 @@ interface MessageBubbleProps {
   pending?: boolean;
 }
 
-export function MessageBubble({ message, agentName = 'Agent', pending = false }: MessageBubbleProps) {
+export function MessageBubble({ message, agentName = 'AI agent', pending = false }: MessageBubbleProps) {
   const isUser = message.role === 'user';
 
   return (

@@ -5,7 +5,7 @@ import { ChatHeader } from '@/components/chat/ChatHeader';
 import { ChatWindow } from '@/components/chat/ChatWindow';
 import { ScenarioPanel } from '@/components/layout/ScenarioPanel';
 import { SurveyScreen } from '@/components/survey/SurveyScreen';
-import { postChatSurveyQuestions } from '@/data/surveyQuestions';
+import { postChatSurveyInstruction, postChatSurveyQuestions } from '@/data/surveyQuestions';
 import { readEntryParams } from '@/lib/entryParams';
 import {
   clearSessionId,
@@ -307,7 +307,8 @@ export default function Study() {
     return (
       <SurveyScreen
         title="About your conversation"
-        description={`Please rate your experience with ${session.agent.displayName}. There are ${postChatSurveyQuestions.length} statements; indicate how much you agree with each.`}
+        description={`There are ${postChatSurveyQuestions.length} statements, each rated from 1 (Strongly disagree) to 7 (Strongly agree). Please answer every one.`}
+        instruction={postChatSurveyInstruction}
         questions={postChatSurveyQuestions}
         onSubmit={handleSurveySubmit}
         isSubmitting={isSubmittingSurvey}
@@ -352,9 +353,7 @@ export default function Study() {
             onDraftChange={setDraft}
             onSend={handleSend}
             inputDisabled={isSending || isLocked || openingPending}
-            inputPlaceholder={
-              openingPending ? 'Please wait for the conversation to start…' : `Message ${session.agent.displayName}...`
-            }
+            inputPlaceholder={openingPending ? 'Please wait for the conversation to start…' : 'Type your message…'}
             error={sendError ? { message: sendError, onRetry: handleRetry } : null}
             onContinueToSurvey={() => setView('survey')}
           />
@@ -386,7 +385,7 @@ function LandingScreen({ onBegin, isStarting }: LandingScreenProps) {
         </CardHeader>
         <CardContent className="space-y-6">
           <ul className="space-y-3 text-sm text-foreground list-disc pl-5">
-            <li>You will chat with a customer service agent about a situation that will be described to you.</li>
+            <li>You will chat with an AI customer service agent about a situation that will be described to you.</li>
             <li>Read the situation, then respond to the agent as you naturally would. The conversation has a fixed number of exchanges, shown at the top of the screen.</li>
             <li>Afterwards you will answer a short questionnaire about the conversation.</li>
             <li>At the end you will receive a completion code to enter in the survey. Please keep this window open until you have it.</li>

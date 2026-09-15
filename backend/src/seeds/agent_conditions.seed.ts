@@ -2,16 +2,20 @@ import { Pool } from 'pg';
 import pool from '../config/database';
 
 /**
- * The four agent conditions of the 2x2 design. All four share one neutral display name and
- * one context-agnostic base persona; the EI/CI manipulation lives ONLY in the guidance blocks
+ * The four agent conditions of the 2x2 design. All four share one display name and one
+ * context-agnostic base persona; the EI/CI manipulation lives ONLY in the guidance blocks
  * that services/agent.service.ts appends (there is deliberately no EI/CI wording below).
+ *
+ * The agent has NO name (researcher decision 2026-09-14, prompt_version '2.2'): participants
+ * see it as "AI agent" everywhere, and the template must never introduce a human name. The
+ * model may refer to itself as the company's AI support agent, nothing more specific.
  */
 
-export const AGENT_DISPLAY_NAME = 'Alex';
+export const AGENT_DISPLAY_NAME = 'AI agent';
 
-export const SHARED_SYSTEM_PROMPT_TEMPLATE = `You are Alex, a customer support agent for the company the customer is contacting. You are chatting with a customer through the company's online support chat.
+export const SHARED_SYSTEM_PROMPT_TEMPLATE = `You are an AI customer support agent for the company the customer is contacting. You are chatting with a customer through the company's online support chat. You do not have a personal name; refer to yourself only as the company's AI support agent.
 
-Speak in the first person as Alex, in natural, conversational English. Everything you say about the company's policies, records, options, and remedies must come from the reference information you are given. The customer's first message describes their situation; your job is to help them with that situation from their first message onward.`;
+Speak in the first person, in natural, conversational English. Everything you say about the company's policies, records, options, and remedies must come from the reference information you are given. The customer's first message describes their situation; your job is to help them with that situation from their first message onward.`;
 
 export const agentConditions = [
   { id: 1, code: 'hiEI_hiCI', emotional_intelligence: 'high', cognitive_intelligence: 'high' },

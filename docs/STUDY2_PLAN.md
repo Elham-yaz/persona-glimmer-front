@@ -16,6 +16,7 @@ This plan turns the current 20-topic, login-based, twice-weekly platform into a 
 | D10 deploys | **Unchanged for now:** backend from `Elham-yaz/main` (Render), frontend from `surjray/main` (Netlify). |
 | Everything else | Implementer's judgement, following the recommendations in §2 (neutral agent name, `?rid=` capture, error-and-retry on OpenAI failure with no persisted fallback, balanced/random flag, no PII). |
 | Control context *(amendment 2026-09-07)* | **Changed from a booking-inquiry scenario in a separate travel domain to a food-delivery informational context**, per researcher request: context 3 is now `food_informational` ("Delivery Order Inquiry"), same Food Delivery domain as contexts 1–2, with **no service issue** — the customer has a just-placed order and chats with the agent to learn about delivery timing, ingredients/allergens, packaging/presentation and the delivery process. Domain is now constant across all three contexts; the content remains a fabricated placeholder until the team supplies the final material. |
+| Agent display and post-chat instrument *(amendment 2026-09-14)* | **The agent has no name.** Everywhere the participant sees it, it reads **"AI agent"** (`agent_conditions.display_name = 'AI agent'`); the shared prompt template now introduces "an AI customer support agent for the company the customer is contacting" and tells the model to speak in the first person without adopting a human name — **D7's single neutral first name is superseded** (`PROMPT_VERSION` 2.1 → 2.2). The 16 post-chat items are **replaced by the instrument supplied by the researchers** (Satisfaction ×2, Compliance intention, AI preference, Perceived emotional intelligence ×5, Perceived cognitive intelligence ×5, Realism, Engagement — ids `post-1…16`, the mandated order and the 1–7 scale unchanged; `survey_questions.version` 1.0 → 2.0), shown under one instruction sentence with the **category labels hidden** from participants (an EI/CI heading would prime them). Sessions stamped `prompt_version = '2.1'` were collected under the old name and the old items. |
 
 ---
 
@@ -30,7 +31,7 @@ This plan turns the current 20-topic, login-based, twice-weekly platform into a 
 | Contexts | 20 topics, sequential unlock | **3**, one per session: food-delivery utilitarian, food-delivery hedonic, **new** food-delivery informational (no service issue; amended 2026-09-07 — see §0) |
 | Assignment | Agent at registration; topics in fixed order | **Agent × context randomized on entry**, fixed for the session |
 | Progression | 10 interactions → survey → next topic ×20 | 10 interactions → survey → **completion code** → done |
-| Post-chat survey | 16 items per topic | Same 16 items, once |
+| Post-chat survey | 16 items per topic | 16 items, once *(the Study-1 items were replaced by the researchers' instrument on 2026-09-14 — see §0)* |
 | Completion | "Study complete" screen | **Random 5-digit code**, persisted, participant types it into Qualtrics |
 | Data | users / messages / interactions / surveys | sessions / messages / survey responses / completion codes (+ assignment) |
 
@@ -54,7 +55,7 @@ Each item: **Decision → Recommendation → Why.** Items marked ❓ need resear
 
 **D6 — OpenAI failure handling.** Today an OpenAI error silently persists a canned apology as a real agent turn and still burns an interaction (contaminates data). Recommend: on failure, **do not persist anything**, return an error, and let the participant retry (the frontend shows "please try again"). If the team prefers never blocking, fall back but persist `is_fallback = true` and do **not** count the interaction. Either way, remove the naive `hack/exploit/illegal` substring output filter (false positives) — the prompt-level guardrails remain.
 
-**D7 — Agent display / blinding.** ❓ Show a single **neutral display name** (e.g., "Alex, Customer Support") for all four conditions so nothing in the UI hints at the manipulation. The four agents share one base persona template; the manipulation lives entirely in the EI and CI guidance blocks (reusing the existing `low`/`high` blocks; `medium` is dropped). This also fixes the current template/level contradictions.
+**D7 — Agent display / blinding.** *(superseded 2026-09-14: the agent is shown as **"AI agent"** with no name — see §0; the original recommendation is kept for the record.)* ❓ Show a single **neutral display name** (e.g., a fixed first name with "Customer Support") for all four conditions so nothing in the UI hints at the manipulation. The four agents share one base persona template; the manipulation lives entirely in the EI and CI guidance blocks (reusing the existing `low`/`high` blocks; `medium` is dropped). This also fixes the current template/level contradictions.
 
 **D8 — Control-context knowledge injection** *(amended 2026-09-07: the control context is a food-delivery informational inquiry — see §0)*. Store the control context's reference material as plain text in `contexts.agent_policy`; the prompt builder injects it as "Reference information" for that context (same slot the food-failure policies use). gpt-4o-mini's context window makes even a multi-page document fine — no retrieval layer needed. The context also needs a small **fictional order record** (order number, restaurant name, ordered items with prices, time placed, estimated delivery window — no customer name) plus ingredient/allergen, packaging and delivery-process information so the agent can answer the informational question threads consistently. ❓ Content must come from the team.
 
@@ -74,7 +75,7 @@ agent_conditions
   code VARCHAR(20) UNIQUE,            -- 'hiEI_hiCI' | 'hiEI_loCI' | 'loEI_hiCI' | 'loEI_loCI'
   emotional_intelligence VARCHAR(4) CHECK (IN ('low','high')),
   cognitive_intelligence VARCHAR(4) CHECK (IN ('low','high')),
-  display_name VARCHAR(100),          -- same neutral name for all four (D7)
+  display_name VARCHAR(100),          -- same for all four (D7; 'AI agent' since 2026-09-14)
   system_prompt_template TEXT,        -- shared base persona
   created_at TIMESTAMPTZ
 
@@ -178,10 +179,10 @@ Invariants enforced server-side: one context per session; max 10 interactions; s
 1. **Control (informational) context:** the reference document (delivery timing, ingredients/allergens, packaging/presentation, the delivery process — PDF/DOCX/TXT, we convert to text); the fictional order record the agent "knows"; the participant scenario text ("You just placed an order at … and want to know …"). (No separate agent opening line exists — per D4 the scenario itself is the auto-sent first message.)
 2. **Food-delivery contexts:** confirm reuse of topics 1–2 verbatim (`Missing Food Item` utilitarian; `Messy Food Presentation` hedonic), or supply edits.
 3. **Four agent prompts:** confirm the shared base persona + existing EI/CI `low`/`high` guidance blocks are the intended manipulation, or supply wording.
-4. **Post-chat items:** confirm all 16 verbatim. ⚠️ At least `post-6` ("The agent resolved my issue to my satisfaction") presupposes a service issue — decide whether it stays for the informational context, is reworded, or is context-conditional.
+4. **Post-chat items:** confirm all 16 verbatim. ⚠️ At least `post-6` ("The agent resolved my issue to my satisfaction") presupposes a service issue — decide whether it stays for the informational context, is reworded, or is context-conditional. *(Resolved 2026-09-14: the researchers supplied a new 16-item instrument — see §0.)*
 5. **Global guardrails** text review (currently service-failure flavored).
 6. **Landing-page copy** (instructions; any consent line) and the **completion-screen wording**.
-7. **Agent display name(s)** (D7).
+7. **Agent display name(s)** (D7). *(Resolved 2026-09-14: no name — shown as "AI agent"; see §0.)*
 
 ---
 
@@ -231,10 +232,10 @@ Phases 1 and 2 can proceed in parallel once the API contract (§4) is agreed; Ph
 3. Opening: **agent greets, participant authors all 10** vs auto-send first-person opener counted as turn 1? (D4)
 4. Completion codes **unique**? Any format constraints beyond 5 digits? (D5)
 5. OpenAI failure: **error + retry, nothing persisted** vs fallback flagged & uncounted? (D6)
-6. **One neutral agent name** for all conditions? (D7)
+6. **One neutral agent name** for all conditions? (D7) *(2026-09-14: no name — shown as "AI agent")*
 7. Pass a Qualtrics response id via the link (`?rid=`)? **Yes, recommended.** (D9)
 8. Point Netlify at `Elham-yaz` so one repo deploys both? **Yes, recommended.** (D10)
-9. `post-6` wording for the informational context? (§6.4)
+9. `post-6` wording for the informational context? (§6.4) *(moot since 2026-09-14: the instrument was replaced)*
 10. Same DB with new tables (**recommended**) vs a fresh database? (D2)
 11. Show the `n/10` counter to participants? (**yes**, as today)
 12. Store user-agent/device info? (**no** — no PII by default)

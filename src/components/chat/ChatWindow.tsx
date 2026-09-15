@@ -115,7 +115,7 @@ export function ChatWindow({
           onChange={onDraftChange}
           onSend={onSend}
           disabled={inputDisabled}
-          placeholder={inputPlaceholder ?? `Message ${agentName}...`}
+          placeholder={inputPlaceholder ?? 'Type your message…'}
         />
       )}
     </div>

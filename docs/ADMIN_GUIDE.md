@@ -45,7 +45,9 @@ The header shows the active **assignment mode** (`random` or `balanced`) reporte
 - Click a row (or **View**) for the **session detail**: status, interactions, completion code,
   external id, model / prompt version, locked-at and completed-at times, the full **transcript** in
   sequence order (1 = the auto-sent scenario, 2 = the first agent reply, ..., 20 = the tenth reply)
-  and the 16 **survey responses** with the item text.
+  and the 16 **survey responses** with the item text (the text shown is the current instrument, version
+  `2.0`; for sessions with prompt version `2.1`, collected before 2026-09-14, the same ids refer to the
+  earlier version-1.0 items).
 
 ### Messages
 - Every participant and agent message across all sessions, newest first: time, session (click to open
@@ -80,8 +82,17 @@ Notes for analysis:
   programmatically and it matters.
 - `completion_code` is the join key to Qualtrics (participants type it in); `external_id` is the
   second join key when the study link passed `?rid=${e://Field/ResponseID}`.
-- Survey item text is not in the CSV. It is fixed in the `survey_questions` table (version `1.0`) and
-  in `src/data/surveyQuestions.ts`; ids are `post-1` ... `post-16`.
+- Survey item text is not in the CSV. It is fixed in the `survey_questions` table (version `2.0`, the
+  16-item instrument the researchers supplied on 2026-09-14) and in `src/data/surveyQuestions.ts`; ids are
+  `post-1` ... `post-16`. Sessions whose `prompt_version` is `2.1` were collected before 2026-09-14 and
+  answered the previous version-1.0 items under the same ids, so join the surveys export to the sessions
+  export on `session_id` and split on `prompt_version` before pooling responses. (Those sessions also
+  saw the agent under a human first name; since 2026-09-14 it is shown only as "AI agent".)
+  `prompt_version` is stamped from code at session creation, whereas the display name, the prompt
+  template and the item text come from the seeded tables, which change only when `npm run seed` is run
+  on the production database. The backend deploy and that re-seed are separate steps, so a session
+  created between them carries `2.2` but saw the old agent and items: compare `created_at` with the
+  deploy and seed times and exclude anything in the gap (the study link should be paused across both).
 - `is_fallback` is always `false` in v2 (a failed model call persists nothing); the column exists for
   compatibility.
 - Sessions with `interaction_count = 0` are participants who pressed Begin but never received the

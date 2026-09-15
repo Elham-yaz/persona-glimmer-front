@@ -4,7 +4,7 @@ interface TypingIndicatorProps {
   agentName?: string;
 }
 
-export function TypingIndicator({ agentName = 'Agent' }: TypingIndicatorProps) {
+export function TypingIndicator({ agentName = 'AI agent' }: TypingIndicatorProps) {
   return (
     <div className="flex gap-3 max-w-[85%] mr-auto animate-slide-in-left" role="status" aria-live="polite">
       <div className="flex-shrink-0 w-8 h-8 rounded-full bg-secondary flex items-center justify-center">

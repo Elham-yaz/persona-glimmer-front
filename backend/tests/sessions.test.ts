@@ -49,7 +49,7 @@ describe('POST /api/sessions', () => {
 
     const data = res.body.data;
     expect(data.sessionId).toMatch(UUID_RE);
-    expect(data.agent).toEqual({ displayName: 'Alex' });
+    expect(data.agent).toEqual({ displayName: 'AI agent' });
     expect(Object.keys(data.context).sort()).toEqual(
       ['code', 'id', 'participantScenario', 'scenarioType', 'title'].sort()
     );
@@ -70,7 +70,7 @@ describe('POST /api/sessions', () => {
 
     const row = await dbSession(data.sessionId);
     expect(row.external_id).toBe('R_qualtrics123');
-    expect(row.prompt_version).toBe('2.1');
+    expect(row.prompt_version).toBe('2.2');
     expect(row.model).toBe('mock');
   });
 
@@ -109,7 +109,7 @@ describe('GET /api/sessions/me (resume)', () => {
     expect(res.status).toBe(200);
     const data = res.body.data;
     expect(data.sessionId).toBe(session.sessionId);
-    expect(data.agent).toEqual({ displayName: 'Alex' });
+    expect(data.agent).toEqual({ displayName: 'AI agent' });
     expect(data.context).toEqual(session.context);
     expect(data.openingMessage).toBe(session.openingMessage);
     expect(data.maxInteractions).toBe(MAX_INTERACTIONS);

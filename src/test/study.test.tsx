@@ -4,6 +4,7 @@ import { render, screen, waitFor, fireEvent, within } from '@testing-library/rea
 import Study from '@/pages/Study';
 import { SESSION_STORAGE_KEY } from '@/lib/api';
 import type { ChatMessage, SessionState } from '@/types';
+import { postChatSurveyInstruction, postChatSurveyQuestions } from '@/data/surveyQuestions';
 
 // ---------------------------------------------------------------------------
 // Fake backend implementing docs/STUDY2_API.md over a mocked global fetch
@@ -68,7 +69,7 @@ const SCENARIO = 'You ordered dinner and one item is missing from the bag.';
 function makeSession(overrides: Partial<SessionState> = {}): SessionState {
   return {
     sessionId: SESSION_ID,
-    agent: { displayName: 'Alex' },
+    agent: { displayName: 'AI agent' },
     context: {
       id: 1,
       code: 'food_utilitarian',
@@ -162,7 +163,8 @@ describe('Study flow', () => {
     // Counter comes from the API and the scenario card is shown
     expect(screen.getByTestId('interaction-counter')).toHaveTextContent('1 / 10');
     expect(screen.getByTestId('scenario-panel')).toHaveTextContent(SCENARIO);
-    expect(screen.getAllByText('Alex').length).toBeGreaterThan(0);
+    // The agent is shown exactly as the API names it (no human name; the API returns "AI agent")
+    expect(screen.getAllByText('AI agent').length).toBeGreaterThan(0);
 
     // Nothing about the manipulation leaks to the participant
     expect(document.body.textContent).not.toMatch(/hiEI|loEI|hiCI|loCI|food_utilitarian/);
@@ -202,6 +204,18 @@ describe('Study flow', () => {
 
     await screen.findByText('About your conversation');
     expect(screen.queryByLabelText('Your message')).not.toBeInTheDocument();
+
+    // The researchers' instruction sentence sits above the items; the 16 items are rendered
+    // verbatim in the mandated order, with the 1-7 anchors and no category labels.
+    expect(screen.getByTestId('survey-instruction')).toHaveTextContent(postChatSurveyInstruction);
+    expect(screen.getAllByTestId('survey-item-text').map((el) => el.textContent)).toEqual(
+      postChatSurveyQuestions.map((q) => q.text)
+    );
+    expect(screen.getAllByText('Strongly disagree')).toHaveLength(16);
+    expect(screen.getAllByText('Strongly agree')).toHaveLength(16);
+    const categories = new Set(postChatSurveyQuestions.flatMap((q) => (q.category ? [q.category] : [])));
+    expect(categories.size).toBeGreaterThan(0);
+    categories.forEach((category) => expect(screen.queryByText(category)).not.toBeInTheDocument());
 
     const submit = screen.getByRole('button', { name: /Submit questionnaire/ });
     expect(submit).toBeDisabled();

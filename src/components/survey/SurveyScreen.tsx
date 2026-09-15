@@ -8,6 +8,8 @@ import { CheckCircle2, Loader2 } from 'lucide-react';
 interface SurveyScreenProps {
   title: string;
   description: string;
+  /** Instruction sentence shown once, above the items (the instrument's own wording). */
+  instruction?: string;
   questions: SurveyQuestion[];
   onSubmit: (responses: SurveyResponse[]) => void;
   isSubmitting?: boolean;
@@ -15,10 +17,19 @@ interface SurveyScreenProps {
 
 /**
  * Full-screen, non-dismissible post-chat questionnaire. All items are shown on
- * one scrollable page; the submit button stays disabled until every item has
- * been answered.
+ * one scrollable page, in instrument order, under a single instruction
+ * sentence; the submit button stays disabled until every item has been
+ * answered. Item categories are analysis metadata and are deliberately never
+ * rendered (see src/data/surveyQuestions.ts).
  */
-export function SurveyScreen({ title, description, questions, onSubmit, isSubmitting = false }: SurveyScreenProps) {
+export function SurveyScreen({
+  title,
+  description,
+  instruction,
+  questions,
+  onSubmit,
+  isSubmitting = false,
+}: SurveyScreenProps) {
   const [responses, setResponses] = useState<Record<string, number>>({});
 
   const answeredCount = questions.filter((q) => responses[q.id] !== undefined).length;
@@ -61,6 +72,14 @@ export function SurveyScreen({ title, description, questions, onSubmit, isSubmit
 
       <main className="flex-1">
         <div className="max-w-3xl mx-auto px-4 sm:px-6 py-6 space-y-8">
+          {instruction && (
+            <p
+              className="text-sm text-foreground rounded-lg border bg-muted/40 px-4 py-3"
+              data-testid="survey-instruction"
+            >
+              {instruction}
+            </p>
+          )}
           {questions.map((question, index) => {
             const answered = responses[question.id] !== undefined;
             return (
@@ -70,10 +89,7 @@ export function SurveyScreen({ title, description, questions, onSubmit, isSubmit
                     {index + 1}
                   </span>
                   <div className="flex-1">
-                    {question.category && (
-                      <span className="text-xs font-medium text-primary uppercase tracking-wide">{question.category}</span>
-                    )}
-                    <p id={`q-${question.id}`} className="text-foreground mt-1">
+                    <p id={`q-${question.id}`} className="text-foreground" data-testid="survey-item-text">
                       {question.text}
                     </p>
                   </div>
